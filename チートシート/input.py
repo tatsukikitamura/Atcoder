@@ -11,4 +11,3 @@ a = input().split()
 a = list(map(int,input().split()))
 
 a = input().split('T')
-
