@@ -15,7 +15,9 @@ print(user1)
 for i in range(div):
   preanswer = [0]*(N+1)
   for j in range(3):
-    preanswer[(i+(L/3)*(j))] += 1
+    preanswer[(i+(L//3)*(j))] += 1
   preans.append(preanswer)
+  
+
 
 print(preans)
