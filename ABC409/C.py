@@ -11,13 +11,22 @@ for i in range(N-1):
     user1.append(int(user2))
   
 user1.sort()
-print(user1)
+tenkanri = [0]*L
+
+for i in user1:
+   tenkanri[i] += 1
+
+lastanswer = 0
+
 for i in range(div):
-  preanswer = [0]*(N+1)
+  answer =1
   for j in range(3):
-    preanswer[(i+(L//3)*(j))] += 1
-  preans.append(preanswer)
+    answer *= tenkanri[(i+(div)*(j))]
+  lastanswer += answer
+
+if L % 3 != 0:
+   lastanswer = 0
+print(lastanswer)
+  
   
 
-
-print(preans)
