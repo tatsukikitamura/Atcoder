@@ -12,9 +12,14 @@ for i in li:
         if i <= li[j]:
                 count += 1
     if i <= count:
-        ans.append(i)
+        continue
     else:
+         print(i)
          break
     
-print(max(ans))
+    
+if ans == []:
+     print(0)
+else:
+     print(max(ans))
 
