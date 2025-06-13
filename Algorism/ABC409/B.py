@@ -14,13 +14,8 @@ for i in li:
     if i <= count:
         continue
     else:
-<<<<<<< HEAD:ABC409/B.py
-        ans.append(i)
-        break
-=======
          print(i)
          break
->>>>>>> 42b34f58c5dabbd0e6cf6587a9861b2b758fdd2e:Algorism/ABC409/B.py
     
     
 if ans == []:
