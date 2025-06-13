@@ -12,10 +12,19 @@ for i in li:
         if i <= li[j]:
                 count += 1
     if i <= count:
-        ans.append(i)
+        continue
     else:
+<<<<<<< HEAD:ABC409/B.py
         ans.append(i)
         break
+=======
+         print(i)
+         break
+>>>>>>> 42b34f58c5dabbd0e6cf6587a9861b2b758fdd2e:Algorism/ABC409/B.py
     
-print(max(ans))
+    
+if ans == []:
+     print(0)
+else:
+     print(max(ans))
 
