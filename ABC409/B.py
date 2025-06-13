@@ -14,7 +14,8 @@ for i in li:
     if i <= count:
         ans.append(i)
     else:
-         break
+        ans.append(i)
+        break
     
 print(max(ans))
 
