@@ -10,7 +10,6 @@ ads = []
 ans_want = []
 sikiri = []
 masu = []
-answer = []
 print1 = []
 
 for i in range(K):  ##じぶんがもってるやつ
@@ -51,7 +50,6 @@ def use_1(masu1):
 
 def use_2(masu1):
     print1.append([2,masu1[0][0],masu1[0][1]])
-    answer.append(masu1)
     masu1[1] -= 1
     masu.append(masu1)
     return 
@@ -85,7 +83,7 @@ def use_4(masu1,masu2):  #masu2を数字の大きい方と仮定
             masu.append(masu3)
         return 
 
-for x in range(1000):
+for x in range(10000):
     #if time.time() * 1000 - start_time > 4000:
         #print(1)
         #break
@@ -103,7 +101,9 @@ for i in range(19):
     print(' '.join(['1']*20))
 
 for x in range(1000):
-    use_2(masu[x])
+    target =masu[random.randint(0,len(masu)-1)]
+    use_2(target)
+    use_1(target)
 
 for op in print1:
     print(' '.join(map(str, op)))
