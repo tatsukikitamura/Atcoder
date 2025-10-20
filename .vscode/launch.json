@@ -1,0 +1,15 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "(gdb) Launch",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${fileDirname}/a.out", // <-- このように修正
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${fileDirname}",
+            "MIMode": "gdb",
+        }
+    ]
+}
