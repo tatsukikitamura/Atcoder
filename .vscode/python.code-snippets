@@ -1,0 +1,41 @@
+{
+  "Competitive Programming Template": {
+    "prefix": "cp",
+    "body": [
+      "import sys",
+      "from collections import deque, defaultdict, Counter",
+      "from itertools import accumulate, permutations, combinations",
+      "from bisect import bisect_left, bisect_right",
+      "from heapq import heapify, heappush, heappop",
+      "import math",
+      "",
+      "def input(): return sys.stdin.readline().rstrip()",
+      "def int_input(): return int(input())",
+      "def map_int(): return map(int, input().split())",
+      "def list_int(): return list(map_int())",
+      "",
+      "def main():",
+      "    $0",
+      "",
+      "if __name__ == '__main__':",
+      "    main()"
+    ],
+    "description": "Competitive Programming Template"
+  },
+  "Input Single Integer": {
+    "prefix": "ini",
+    "body": "n = int_input()",
+    "description": "Input single integer"
+  },
+  "Input Multiple Integers": {
+    "prefix": "inm",
+    "body": "${1:a}, ${2:b} = map_int()",
+    "description": "Input multiple integers"
+  },
+  "Input List": {
+    "prefix": "inl",
+    "body": "${1:A} = list_int()",
+    "description": "Input list of integers"
+  }
+}
+

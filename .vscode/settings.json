@@ -1,0 +1,23 @@
+{
+  "python.defaultInterpreterPath": "python3",
+  "files.autoSave": "afterDelay",
+  "editor.formatOnSave": false,
+  "editor.codeActionsOnSave": {
+    "source.organizeImports": "never"
+  },
+  "[python]": {
+    "editor.tabSize": 4,
+    "editor.insertSpaces": true
+  },
+  "[cpp]": {
+    "editor.tabSize": 2,
+    "editor.insertSpaces": true,
+    "editor.formatOnSave": false
+  },
+  "code-runner.executorMap": {
+    "cpp": "cd $dir && g++ -std=c++17 -O2 -Wall -o $fileNameWithoutExt $fileName && ./$fileNameWithoutExt"
+  },
+  "code-runner.runInTerminal": true,
+  "code-runner.clearPreviousOutput": true
+}
+
