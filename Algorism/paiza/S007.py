@@ -36,14 +36,14 @@ L = len(S)
 
 def parse(x):
     counts = collections.Counter()
-    num _str = ""
+    num_str = ""
     while i < L:
         char = S[i]
         if char.isdigit():
             num_str += char
             i += 1
         elif char == "(":
-            N = int(num_str) else 1
-            
+            N = int(num_str) 
+
 
 
