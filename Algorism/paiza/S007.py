@@ -7,16 +7,17 @@ x = 0
 def isString(input_data) -> bool:
     return isinstance(input_data, str)
 
-def check(x,N):
+def check(STR:list,N:int) -> int:
     NUMBER = 1
-    for x in range(N):
-        if STR[x] == '(':
-            NUMBER = NUMBER * STR[x-1]
-        elif STR[x] == ')':
+    for y in range(N):
+        if STR[y] == '(':
+            NUMBER = NUMBER * STR[y-1]
+        elif STR[y] == ')':
             NUMBER = 1
-        elif STR[x].isdigit():
-            NUMBER = int(STR[x])*NUMBER
+        elif STR[y].isdigit():
+            NUMBER = int(STR[y])*NUMBER
     return NUMBER
+
 
 for y in range(len):
     if isString(STR[y]) and STR[y] not in use:

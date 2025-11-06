@@ -9,6 +9,7 @@ def plus(list1,list2):
         for y in range(-1,2):
             if x+y < 0 or x+y >= len(list1):
                 continue
+                
             else:
                 list3.append(list1[x+y] + list2[x])
         list2[x] = max(list3)
