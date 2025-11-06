@@ -2,11 +2,8 @@ N = int(input())
 A,B = map(int,input().split())
 LIST = []
 USE = [1]
-for _ in range(N):
-    USE.append(0)
-    
-count = 0
 for x in range(N):
+    USE.append(0)
     LIST.append(x)
 
 def check(NUM:int):
