@@ -1,37 +1,22 @@
-N,A,B = map(int,input().split())
-S = str(input())
-# "a" >= A
-# "b" < B
+N, A, B = map(int, input().split())
+S = list(input())
+l = 0
+idx_a, idx_b = [0], [0]
+res = 0
+for r in range(N):
+    if S[r] == 'a':
+        idx_a.append(r+1)
+    else:
+        idx_b.append(r+1)
+    if len(idx_a)-1 >= A:
+        al = idx_a[-A]
+        if len(idx_b)-1 >= B:
+            bl = idx_b[-B]
+        else:
+            bl = 0
+        res += max(0, al - bl)
 
-list = [0,0]
-use_count = 0
 
-def check(x:int,list:list) -> int:
-    count = 0
-    while True:
-        if S[x] == "a":
-            list[0] += 1
-        elif S[x] == "b":
-            list[1] += 1
-        elif list[0] >= A and list[1] < B:
-            count += 1
-        elif list[0] >= A and list[1] >= B:
-            break
-        x += 1
-    return (x,count)
-
-x = 0
-while x < N:
-    if S[x] == "a":
-        y,count = check(x,list)
-        use_count += count
-        x +=  y
-        list[0] -=  1
-        
-    elif S[x] == "b":
-        y,count = check(x,list)
-        use_count += count
-        x +=  y
-        list[1] -= 1
-
-print(use_count)
+print(idx_a)
+print(idx_b)
+print(res)
