@@ -49,3 +49,6 @@ with open(output_file, 'w') as f:
 print(f"大きなテストケースを生成しました: {output_file}")
 print(f"パラメータ: N={N}, K={K}, T={T}")
 
+
+
+
