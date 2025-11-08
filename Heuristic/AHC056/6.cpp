@@ -8,8 +8,8 @@
 #include <tuple>
 #include <algorithm>
 #include <chrono> // 時間管理
-#include <random> // ランダム
-#include <cmath>  // exp
+#include <random> // ランダム (ビームサーチでは不要だが念のため)
+#include <cmath>  // exp (不要)
 
 using namespace std;
 using namespace std::chrono;
@@ -24,19 +24,17 @@ int N, K, T;
 vector<string> V_WALLS;
 vector<string> H_WALLS;
 vector<pair<int, int>> TARGETS;
-set<Pos> TARGET_SET; // ### NEW ###: 目的地かどうかの高速チェック用
+// set<Pos> TARGET_SET; // ### DELETED ###: フェーズ2専用だったため削除
 
-double TIME_LIMIT_SEC = 1.8; 
+// 時間制限 (ビームサーチのみなので少し余裕を持たせる)
+double TIME_LIMIT_SEC = 1.9; 
 auto start_time = high_resolution_clock::now(); 
 
 // ビームサーチ設定
-int BEAM_WIDTH = 8;
-int N_PATHS_PER_STATE = 5;
+int BEAM_WIDTH = 15;
+int N_PATHS_PER_STATE = 10;
 
-// ILS (フェーズ2) 設定
-int N_KICK = 20; 
-const double START_TEMP = 5;
-const double END_TEMP = 0.001;
+// ILS (フェーズ2) 設定 // ### DELETED ###
 
 // --- 4.0. 構造体の定義 (main の外) ---
 struct BeamState {
@@ -147,74 +145,7 @@ vector<Pos> reconstruct_path(map<Pos, map<int, pair<Pos, int>>>& prev, Pos start
 }
 
 // --- 3.6. パレート最適ダイクストラ (ローカルサーチ用 - 単一解) ---
-// ### CHANGED ###: forbidden_cell を受け取れるように改造
-vector<Pos> find_path_dijkstra_single(Pos start_pos, Pos goal_pos, int step_limit, const set<Pos>& total_path_cells, const Pos& forbidden_cell) {
-    using State = tuple<int, int, Pos>;
-    priority_queue<State, vector<State>, greater<State>> pq;
-    pq.push({0, 0, start_pos});
-    map<Pos, map<int, int>> dist;
-    dist[start_pos][0] = 0;
-    map<Pos, map<int, pair<Pos, int>>> prev;
-    vector<pair<int, int>> found_goals; 
-
-    while (!pq.empty()) {
-        auto [cost, steps, pos] = pq.top(); pq.pop();
-        if (dist.count(pos) && dist[pos].count(steps) && dist[pos][steps] < cost) continue;
-        if (pos == goal_pos) {
-            found_goals.push_back({cost, steps});
-            continue;
-        }
-        if (steps + 1 > step_limit) continue;
-
-        auto current_time = high_resolution_clock::now();
-        if (duration_cast<duration<double>>(current_time - start_time).count() > TIME_LIMIT_SEC) {
-            break; 
-        }
-
-        for (char d : {'U', 'D', 'L', 'R'}) {
-            if (can_move(pos.first, pos.second, d)) {
-                Pos next_pos = get_next_pos(pos.first, pos.second, d);
-
-                // ### NEW ###: 標的セルは通行禁止
-                if (next_pos == forbidden_cell) continue; 
-
-                int next_steps = steps + 1;
-                int new_cost = cost;
-                if (total_path_cells.find(next_pos) == total_path_cells.end()) {
-                    new_cost += 1;
-                }
-                bool is_dominated = false;
-                if (dist.count(next_pos)) {
-                    for (auto const& [existing_steps, existing_cost] : dist[next_pos]) {
-                        if (existing_steps <= next_steps && existing_cost <= new_cost) {
-                            is_dominated = true; break;
-                        }
-                    }
-                }
-                if (is_dominated) continue;
-                if (dist.count(next_pos)) {
-                    vector<int> dominated_steps;
-                    for (auto const& [existing_steps, existing_cost] : dist[next_pos]) {
-                        if (existing_steps >= next_steps && existing_cost >= new_cost) {
-                            dominated_steps.push_back(existing_steps);
-                        }
-                    }
-                    for (int s : dominated_steps) {
-                        dist[next_pos].erase(s);
-                        prev[next_pos].erase(s);
-                    }
-                }
-                dist[next_pos][next_steps] = new_cost;
-                prev[next_pos][next_steps] = {pos, steps};
-                pq.push({new_cost, next_steps, next_pos});
-            }
-        }
-    }
-    if (found_goals.empty()) return {}; // None
-    sort(found_goals.begin(), found_goals.end());
-    return reconstruct_path(prev, start_pos, goal_pos, found_goals[0].second);
-}
-
+// ### DELETED ### (フェーズ2専用だったため)
 
 // --- 3.7. パレート最適ダイクストラ (ビームサーチ用 - 複数解) ---
 vector<DijkstraResult> find_path_dijkstra_beam(Pos start_pos, Pos goal_pos, int step_limit, const set<Pos>& total_path_cells) {
@@ -227,6 +158,12 @@ vector<DijkstraResult> find_path_dijkstra_beam(Pos start_pos, Pos goal_pos, int 
     vector<pair<int, int>> found_goals;
 
     while (!pq.empty()) {
+        // 時間チェック
+        auto current_time = high_resolution_clock::now();
+        if (duration_cast<duration<double>>(current_time - start_time).count() > TIME_LIMIT_SEC) {
+            break; 
+        }
+
         auto [cost, steps, pos] = pq.top(); pq.pop();
         if (dist.count(pos) && dist[pos].count(steps) && dist[pos][steps] < cost) continue;
         if (pos == goal_pos) {
@@ -286,18 +223,7 @@ vector<DijkstraResult> find_path_dijkstra_beam(Pos start_pos, Pos goal_pos, int 
 }
 
 // ヘルパー: BeamState の C と steps を再計算
-void recalculate_state(BeamState& state) {
-    state.path_cells.clear();
-    state.path_cells.insert(TARGETS[0]);
-    state.total_steps = 0;
-    for (const auto& path : state.paths_list) {
-        if (!path.empty()) {
-            state.path_cells.insert(path.begin(), path.end());
-            state.total_steps += (path.size() - 1);
-        }
-    }
-    state.total_C = state.path_cells.size() + 1; // +1 for dummy color 0
-}
+// ### DELETED ### (フェーズ2専用だったため)
 
 
 int main() {
@@ -310,20 +236,20 @@ int main() {
     for (int i = 0; i < N - 1; ++i) cin >> H_WALLS[i];
     for (int i = 0; i < K; ++i) {
         cin >> TARGETS[i].first >> TARGETS[i].second;
-        TARGET_SET.insert(TARGETS[i]); // ### NEW ###
+        // TARGET_SET.insert(TARGETS[i]); // ### DELETED ###
     }
 
     // --- 4.1. 全区間の自由度を計算 ---
     vector<Segment> segments_info;
     double total_shortest_steps_X = 0;
-    vector<int> shortest_lengths(K - 1);
-    vector<vector<Pos>> all_shortest_paths_fallback(K - 1);
+    vector<int> shortest_lengths(K - 1); // ビームサーチのフォールバックで使う
+    vector<vector<Pos>> all_shortest_paths_fallback(K - 1); // ビームサーチのフォールバックで使う
 
     for (int k = 0; k < K - 1; ++k) {
         Pos start_node = TARGETS[k], goal_node = TARGETS[k + 1];
         auto [X_k, path_k] = bfs_path_and_length(start_node, goal_node);
-        all_shortest_paths_fallback[k] = path_k;
-        shortest_lengths[k] = X_k;
+        all_shortest_paths_fallback[k] = path_k; // フォールバック用に保存
+        shortest_lengths[k] = X_k; // フォールバック用に保存
         double freedom_score = 1e18;
         if (X_k < 1e9 && !path_k.empty()) {
             total_shortest_steps_X += X_k;
@@ -347,9 +273,15 @@ int main() {
 
     for (const auto& segment : segments_info) {
         int k = segment.k; int X_k = segment.X_k;
-        if (X_k >= 1e9) continue;
+        if (X_k >= 1e9) continue; // 到達不能な区間はスキップ
         Pos start_node = TARGETS[k], goal_node = TARGETS[k + 1];
         vector<BeamState> next_beam;
+
+        // 時間チェック
+        auto current_time_check = high_resolution_clock::now();
+        if (duration_cast<duration<double>>(current_time_check - start_time).count() > TIME_LIMIT_SEC) {
+            break; // ビームサーチを途中で打ち切り
+        }
 
         for (const auto& state : current_beam) {
             double steps_allowed_total = T - state.total_steps;
@@ -359,9 +291,12 @@ int main() {
                 
             vector<DijkstraResult> candidate_paths_info = find_path_dijkstra_beam(start_node, goal_node, step_limit, state.path_cells);
             
+            // フォールバック: ダイクストラが失敗した場合 (時間切れなど)
             if (candidate_paths_info.empty()) {
+                // segment.path_k (BFS最短) を使う
+                // このパスのコストを計算
                 int cost = 0;
-                for (const auto& cell : segment.path_k) {
+                for (const auto& cell : segment.path_k) { // segment.path_k は BFS最短経路
                     if (state.path_cells.find(cell) == state.path_cells.end()) cost += 1;
                 }
                 if (!segment.path_k.empty()) { // 安全策
@@ -376,168 +311,116 @@ int main() {
                 set<Pos> new_path_cells = state.path_cells;
                 new_path_cells.insert(path.begin(), path.end());
                 int new_total_steps = state.total_steps + steps;
+                
+                // T を超える解は next_beam に追加しない
+                if (new_total_steps > T) continue; 
+
                 int new_total_C = new_path_cells.size() + 1; 
                 next_beam.push_back({new_paths_list, new_path_cells, new_total_steps, new_total_C});
             }
         }
-        if (next_beam.empty()) { 
-        } else {
-            sort(next_beam.begin(), next_beam.end());
-            if (next_beam.size() > (size_t)BEAM_WIDTH) {
-                next_beam.resize(BEAM_WIDTH);
+        
+        if (next_beam.empty()) {
+            // next_beam が空 (Tを超えるなどで全滅) の場合、
+            // current_beam の中で最良のものを使い、
+            // この k 区間にはフォールバック(BFS最短)を割り当てる
+            // (ただし、ビームが完全に途切れるのを防ぐ)
+            if (current_beam.empty()) break; // current_beam も空なら終了
+            
+            BeamState fallback_state = current_beam[0]; // 最も良い状態を流用
+            if (fallback_state.paths_list[k].empty() && !all_shortest_paths_fallback[k].empty()) {
+                 fallback_state.paths_list[k] = all_shortest_paths_fallback[k];
+                 
+                 // 再計算 (簡易版)
+                 fallback_state.path_cells.insert(all_shortest_paths_fallback[k].begin(), all_shortest_paths_fallback[k].end());
+                 fallback_state.total_steps += shortest_lengths[k];
+                 fallback_state.total_C = fallback_state.path_cells.size() + 1;
+                 
+                 if (fallback_state.total_steps <= T) {
+                    next_beam.push_back(fallback_state);
+                 } else {
+                    // T を超えてしまったら、もうこのビームは使えない
+                    // current_beam から削除 (実質何もしないことで削除扱い)
+                 }
+            } else {
+                 next_beam.push_back(fallback_state); // 既に何か入ってるならそのまま流す
             }
-            current_beam = next_beam;
+
+        } 
+        
+        if (next_beam.empty()) {
+            // フォールバックしてもダメなら、ビームサーチ終了
+            break;
         }
+
+        sort(next_beam.begin(), next_beam.end());
+        if (next_beam.size() > (size_t)BEAM_WIDTH) {
+            next_beam.resize(BEAM_WIDTH);
+        }
+        current_beam = next_beam;
+        
         X_future -= X_k;
     }
 
     // --- 4.4. フェーズ1完了 ---
-    BeamState global_best_solution = current_beam[0];
-    cerr << "Phase 1 (Beam Search) Best C: " << global_best_solution.total_C << endl;
+    // ビームが途中で途切れた場合、current_beam[0] に最良解が入っていない可能性がある。
+    // ビームが途切れた場合は、ビームサーチ開始時の初期状態 (空のパス) を使う必要があるが、
+    // ここでは current_beam に残っている最良解を使う。
     
-    // --- 4.5. フェーズ2: ILS + ターゲットSA ---
-    // ### CHANGED ###: ターゲットSA
-    
-    mt19937 rng(0); 
-    uniform_real_distribution<double> real_dist(0.0, 1.0);
-    uniform_int_distribution<int> k_dist(0, K - 2);
-
-    auto get_time_ratio = [&]() {
-        auto current_time = high_resolution_clock::now();
-        return duration_cast<duration<double>>(current_time - start_time).count() / TIME_LIMIT_SEC;
-    };
-    auto check_time = [&]() { return get_time_ratio() < 1.0; };
-    auto get_temperature = [&](double time_ratio) {
-        return START_TEMP * pow(END_TEMP / START_TEMP, time_ratio);
-    };
-
-    while (check_time()) { // ILS アウターループ
-        BeamState current_solution = global_best_solution;
-
-        // [摂動 (Perturb / "キック")]
-        set<int> kicked_k;
-        for (int i = 0; i < N_KICK && k_dist(rng) < K - 1; ++i) {
-             int k_to_kick = k_dist(rng);
-             if(shortest_lengths[k_to_kick] < 1e9 && !all_shortest_paths_fallback[k_to_kick].empty()) {
-                current_solution.paths_list[k_to_kick] = all_shortest_paths_fallback[k_to_kick];
-                kicked_k.insert(k_to_kick);
+    if (current_beam.empty()) {
+         // ビームが完全にロストした場合 (T厳しすぎなど)
+         // 仕方ないので、全区間 BFS 最短経路で埋める (T無視)
+         cerr << "Warning: Beam search failed. Using BFS fallback." << endl;
+         set<Pos> fallback_cells = {TARGETS[0]};
+         int fallback_steps = 0;
+         for (int k = 0; k < K - 1; ++k) {
+             if (!all_shortest_paths_fallback[k].empty()) {
+                fallback_cells.insert(all_shortest_paths_fallback[k].begin(), all_shortest_paths_fallback[k].end());
+                fallback_steps += shortest_lengths[k];
              }
-        }
-        if (kicked_k.empty()) { 
-            int k_to_kick = k_dist(rng);
-            if(shortest_lengths[k_to_kick] < 1e9 && !all_shortest_paths_fallback[k_to_kick].empty()) {
-                 current_solution.paths_list[k_to_kick] = all_shortest_paths_fallback[k_to_kick];
+         }
+         int fallback_C = fallback_cells.size() + 1;
+         current_beam.push_back({all_shortest_paths_fallback, fallback_cells, fallback_steps, fallback_C});
+    }
+
+    BeamState global_best_solution = current_beam[0];
+    
+    // ビームサーチで全ての k が埋まらなかった場合 (時間切れ or 到達不能)
+    // 埋まらなかった k を BFS 最短で埋める (T超過の可能性あり)
+    bool needs_fallback_fill = false;
+    for (int k = 0; k < K - 1; ++k) {
+        if (global_best_solution.paths_list[k].empty()) {
+            if (shortest_lengths[k] < 1e9 && !all_shortest_paths_fallback[k].empty()) {
+                global_best_solution.paths_list[k] = all_shortest_paths_fallback[k];
+                needs_fallback_fill = true;
             }
         }
-        recalculate_state(current_solution); 
+    }
+    if (needs_fallback_fill) {
+         // 簡易再計算
+         global_best_solution.path_cells.clear();
+         global_best_solution.path_cells.insert(TARGETS[0]);
+         global_best_solution.total_steps = 0;
+         for (const auto& path : global_best_solution.paths_list) {
+             if (!path.empty()) {
+                 global_best_solution.path_cells.insert(path.begin(), path.end());
+                 global_best_solution.total_steps += (path.size() - 1);
+             }
+         }
+         global_best_solution.total_C = global_best_solution.path_cells.size() + 1;
+    }
 
-        // [局所探索 (ターゲットSA)]
-        // ### CHANGED ###
-        int inner_loops = (K - 1) * 2; // (K-1)*2 回の改善を試みる
-        for (int i = 0; i < inner_loops && check_time(); ++i) {
-            
-            Pos target_cell = {-1, -1};
-            int k = -1; // 標的の経路
-            
-            // --- 1. ヒューリスティック: 非効率なセルを探す ---
-            map<Pos, int> cell_usage_count;
-            vector<Pos> non_target_cells;
-            for(const auto& pos : current_solution.path_cells) {
-                if (TARGET_SET.find(pos) == TARGET_SET.end()) { // 目的地ではない
-                    non_target_cells.push_back(pos);
-                }
-            }
-            if (non_target_cells.empty()) { // 削るマスがない
-                k = k_dist(rng); // ランダムな k を選ぶ (フォールバック)
-            } else {
-                // 各非目的地マスが何本のパスで使われているかカウント
-                for(int k_idx=0; k_idx < K-1; ++k_idx) {
-                    if(current_solution.paths_list[k_idx].empty()) continue;
-                    set<Pos> path_unique_cells(current_solution.paths_list[k_idx].begin(), current_solution.paths_list[k_idx].end());
-                    for(const auto& pos : path_unique_cells) {
-                        if (TARGET_SET.find(pos) == TARGET_SET.end()) {
-                            cell_usage_count[pos]++;
-                        }
-                    }
-                }
+    cerr << "Phase 1 (Beam Search) Best C: " << global_best_solution.total_C << endl;
+    cerr << "Phase 1 (Beam Search) Total Steps: " << global_best_solution.total_steps << " (T=" << T << ")" << endl;
 
-                // 「中央」にあり「使用回数が1回」のセルを探す
-                int min_dist_from_center = 1e9;
-                for(const auto& pos : non_target_cells) {
-                    int usage = cell_usage_count[pos];
-                    if (usage == 1) { // 最も非効率
-                        int dist_from_center = abs(pos.first - N / 2) + abs(pos.second - N / 2);
-                        if (dist_from_center < min_dist_from_center) {
-                            target_cell = pos;
-                            min_dist_from_center = dist_from_center;
-                        }
-                    }
-                }
-
-                if (target_cell.first == -1) { // usage=1 が見つからない
-                    k = k_dist(rng); // ランダム (フォールバック)
-                } else {
-                    // --- 2. 'target_cell' を通る 'k' を見つける ---
-                    for(int k_idx=0; k_idx < K-1; ++k_idx) {
-                        for(const auto& pos : current_solution.paths_list[k_idx]) {
-                            if (pos == target_cell) {
-                                k = k_idx; break;
-                            }
-                        }
-                        if (k != -1) break;
-                    }
-                    if (k == -1) { k = k_dist(rng); target_cell = {-1, -1}; } // 見つからない (フォールバック)
-                }
-            }
-            
-            // --- 3. 経路 k を再ルーティング ---
-            if (shortest_lengths[k] >= 1e9) continue;
-            Pos start_node = TARGETS[k], goal_node = TARGETS[k + 1];
-
-            set<Pos> temp_path_cells = {TARGETS[0]};
-            int temp_total_steps = 0;
-            for (int j = 0; j < K - 1; ++j) {
-                if (j == k || current_solution.paths_list[j].empty()) continue;
-                temp_path_cells.insert(current_solution.paths_list[j].begin(), current_solution.paths_list[j].end());
-                temp_total_steps += (current_solution.paths_list[j].size() - 1);
-            }
-
-            int step_limit = T - temp_total_steps;
-            if (step_limit < shortest_lengths[k]) continue;
-
-            // 'target_cell' を禁止して再挿入
-            vector<Pos> new_path_k = find_path_dijkstra_single(start_node, goal_node, step_limit, temp_path_cells, target_cell);
-            if (new_path_k.empty()) continue;
-            
-            // --- 4. 評価と採択 (SA) ---
-            set<Pos> new_path_cells = temp_path_cells; 
-            new_path_cells.insert(new_path_k.begin(), new_path_k.end());
-            int new_C = new_path_cells.size() + 1;
-            
-            double delta_C = (double)new_C - (double)current_solution.total_C;
-            
-            if (delta_C < 0) { // 改善
-                current_solution.paths_list[k] = new_path_k;
-                recalculate_state(current_solution); 
-                if (current_solution.total_C < global_best_solution.total_C) {
-                    global_best_solution = current_solution;
-                }
-            } else { // 悪化
-                double time_ratio = get_time_ratio();
-                double temperature = get_temperature(time_ratio);
-                if (real_dist(rng) < exp(-delta_C / temperature)) {
-                    current_solution.paths_list[k] = new_path_k;
-                    recalculate_state(current_solution); 
-                }
-            }
-        } // end inner loop (SA)
-    } // end while (ILS アウターループ)
+    // --- 4.5. フェーズ2: ILS + ターゲットSA ---
+    // ### DELETED ###
 
 
     // --- 5. 最終解の選択 ---
     int C_val = global_best_solution.total_C;
     int Q_val = K;
-    cerr << "Phase 2 (Final ILS+SA) Best C: " << C_val << endl;
+    // cerr << "Phase 2 (Final ILS+SA) Best C: " << C_val << endl; // ### DELETED ###
 
     // --- 6. 色の割り当てと遷移規則の生成 ---
     map<Pos, int> color_map;
@@ -554,13 +437,13 @@ int main() {
     set<tuple<int, int, int, int, char>> rules;
     for (int k = 0; k < K - 1; ++k) {
         vector<Pos>& path = global_best_solution.paths_list[k];
-        if (path.empty()) continue;
+        if (path.empty()) continue; // パスが空 (到達不能など) の場合はルールを生成しない
         int current_q = k;
         for (size_t p = 0; p < path.size() - 1; ++p) {
             Pos pos = path[p]; Pos next_pos = path[p+1];
-            int c = color_map.count(pos) ? color_map[pos] : 0;
+            int c = color_map.count(pos) ? color_map[pos] : 0; // 色が塗られていないマスは 0
             char d = get_direction(pos, next_pos);
-            int S = (next_pos == TARGETS[k + 1]) ? k + 1 : k;
+            int S = (next_pos == TARGETS[k + 1]) ? k + 1 : k; // ゴールに到達したら状態遷移
             rules.insert({c, current_q, c, S, d});
         }
     }

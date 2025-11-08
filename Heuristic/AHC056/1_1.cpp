@@ -7,8 +7,10 @@
 #include <map>
 #include <tuple>
 #include <algorithm>
+#include <chrono> // <-- 時間管理を追加
 
 using namespace std;
+using namespace std::chrono; // <-- 追加
 
 // --- 1. グローバル変数と設定 ---
 int N, K, T;
@@ -19,6 +21,10 @@ vector<pair<int, int>> TARGETS;
 // ビームサーチ設定 (Pythonコードから)
 int BEAM_WIDTH = 15;
 int N_PATHS_PER_STATE = 7;
+
+// --- 時間制限を追加 ---
+double TIME_LIMIT_SEC = 1.85; 
+auto start_time = high_resolution_clock::now(); 
 
 // 型定義
 using Pos = pair<int, int>; 
@@ -143,6 +149,10 @@ vector<Pos> reconstruct_path(map<Pos, map<int, pair<Pos, int>>>& prev, Pos start
         if (curr_pos == start_pos && curr_steps == 0) {
             break;
         }
+        // 安全チェック (経路復元失敗時)
+        if (prev.find(curr_pos) == prev.end() || prev[curr_pos].find(curr_steps) == prev[curr_pos].end()) {
+             return {}; // 経路復元失敗
+        }
         auto p = prev[curr_pos][curr_steps];
         curr_pos = p.first;
         curr_steps = p.second;
@@ -168,6 +178,14 @@ vector<DijkstraResult> find_path_dijkstra_beam(Pos start_pos, Pos goal_pos, int 
     vector<pair<int, int>> found_goals;
 
     while (!pq.empty()) {
+        
+        // --- ▼ 時間制限チェックを追加 ▼ ---
+        auto current_time = high_resolution_clock::now();
+        if (duration_cast<duration<double>>(current_time - start_time).count() > TIME_LIMIT_SEC) {
+            break; 
+        }
+        // --- ▲ 時間制限チェックを追加 ▲ ---
+
         int cost, steps;
         Pos pos;
         tie(cost, steps, pos) = pq.top();
@@ -192,7 +210,6 @@ vector<DijkstraResult> find_path_dijkstra_beam(Pos start_pos, Pos goal_pos, int 
                 int next_steps = steps + 1;
                 
                 int new_cost = cost;
-                // (Python版の `and next_pos not in path` は prev 復元のため省略)
                 if (total_path_cells.find(next_pos) == total_path_cells.end()) {
                     new_cost += 1;
                 }
@@ -236,7 +253,7 @@ vector<DijkstraResult> find_path_dijkstra_beam(Pos start_pos, Pos goal_pos, int 
 
     // 上位 N_PATHS_PER_STATE 個を選ぶ
     sort(found_goals.begin(), found_goals.end());
-    if (found_goals.size() > N_PATHS_PER_STATE) {
+    if (found_goals.size() > (size_t)N_PATHS_PER_STATE) {
         found_goals.resize(N_PATHS_PER_STATE);
     }
 
@@ -244,7 +261,9 @@ vector<DijkstraResult> find_path_dijkstra_beam(Pos start_pos, Pos goal_pos, int 
     vector<DijkstraResult> results;
     for (auto const& [cost, steps] : found_goals) {
         vector<Pos> path = reconstruct_path(prev, start_pos, goal_pos, steps);
-        results.emplace_back(cost, steps, path);
+        if (!path.empty()) { // 経路復元成功
+            results.emplace_back(cost, steps, path);
+        }
     }
     return results;
 }
@@ -284,6 +303,8 @@ struct Segment {
 int main() {
     ios::sync_with_stdio(false);
     cin.tie(NULL);
+    
+    // start_time は main が呼ばれる前に初期化されている
 
     cin >> N >> K >> T;
     V_WALLS.resize(N);
@@ -308,7 +329,7 @@ int main() {
         shortest_lengths[k] = X_k;
         
         double freedom_score = 1e18;
-        if (X_k < 1e9) {
+        if (X_k < 1e9 && !path_k.empty()) { // path_k が空でないことも確認
             total_shortest_steps_X += X_k;
             set<Edge> forbidden_edges;
             for (size_t i = 0; i < path_k.size() - 1; ++i) {
@@ -326,7 +347,6 @@ int main() {
     // 4.3. ビームサーチの実行
     vector<BeamState> current_beam;
     
-    // *** バグ修正: C = len + 1 ***
     set<Pos> initial_cells = {TARGETS[0]};
     int initial_C = initial_cells.size() + 1; // ダミー色 0 の分
     current_beam.push_back({vector<vector<Pos>>(K - 1), initial_cells, 0, initial_C});
@@ -334,11 +354,20 @@ int main() {
     double X_future = total_shortest_steps_X;
 
     for (const auto& segment : segments_info) {
+        
+        // --- ▼ メインループの時間チェック ▼ ---
+        auto current_time = high_resolution_clock::now();
+        if (duration_cast<duration<double>>(current_time - start_time).count() > TIME_LIMIT_SEC) {
+            break; // ビームサーチを途中で打ち切る
+        }
+        // --- ▲ メインループの時間チェック ▲ ---
+
         int k = segment.k;
         int X_k = segment.X_k;
         vector<Pos> path_k_fallback = segment.path_k;
 
-        if (X_k >= 1e9) continue;
+        if (X_k >= 1e9) continue; // 到達不能な区間
+        if (path_k_fallback.empty()) continue; // BFS最短経路がない区間
         
         Pos start_node = TARGETS[k];
         Pos goal_node = TARGETS[k + 1];
@@ -361,7 +390,7 @@ int main() {
                 state.path_cells
             );
             
-            // 安全策: ダイクストラ失敗
+            // 安全策: ダイクストラ失敗 (時間切れ含む)
             if (candidate_paths_info.empty()) {
                 int cost = 0;
                 for (const auto& cell : path_k_fallback) {
@@ -374,6 +403,7 @@ int main() {
                 
             // 展開
             for (const auto& [cost, steps, path] : candidate_paths_info) {
+                if (path.empty()) continue; // 経路復元失敗
                 
                 vector<vector<Pos>> new_paths_list = state.paths_list;
                 new_paths_list[k] = path;
@@ -382,7 +412,10 @@ int main() {
                 new_path_cells.insert(path.begin(), path.end());
                 
                 int new_total_steps = state.total_steps + steps;
-                // *** バグ修正: C = len + 1 ***
+                
+                // T を超える解は next_beam に追加しない
+                if (new_total_steps > T) continue; 
+
                 int new_total_C = new_path_cells.size() + 1; // +1 for dummy color 0
                 
                 next_beam.push_back({new_paths_list, new_path_cells, new_total_steps, new_total_C});
@@ -390,11 +423,41 @@ int main() {
         }
 
         // 4.4. 枝刈り (Pruning)
+        if (next_beam.empty()) {
+            // この k で T を超えるなどして解が全滅した場合
+            // current_beam の最良解を使い、k には BFS最短 を入れて延命を試みる
+            if (current_beam.empty()) break; // current_beam も空なら終了
+            
+            BeamState fallback_state = current_beam[0]; // 最も良い状態を流用
+            if (fallback_state.paths_list[k].empty()) { // まだ k が埋まってない
+                 fallback_state.paths_list[k] = path_k_fallback;
+                 
+                 // 簡易再計算
+                 fallback_state.path_cells.insert(path_k_fallback.begin(), path_k_fallback.end());
+                 fallback_state.total_steps += X_k;
+                 fallback_state.total_C = fallback_state.path_cells.size() + 1;
+                 
+                 if (fallback_state.total_steps <= T) {
+                    next_beam.push_back(fallback_state);
+                 } else {
+                     // T を超えたのでこのビームは破棄
+                 }
+            } else {
+                // 既に k が埋まっている (自由度のソート順がバグ？)
+                // とりあえずそのまま流す
+                next_beam.push_back(fallback_state);
+            }
+        }
+
+        if (next_beam.empty()) {
+            // フォールバックしてもダメなら、ビームサーチ終了
+            // (current_beam は失われる)
+            break;
+        }
+
         sort(next_beam.begin(), next_beam.end());
-        // 重複する解を削除 (C, steps, path_cells が同じなら同じ解)
-        // (簡易化: unique は重いので、ソートとresizeだけで行う)
         
-        if (next_beam.size() > BEAM_WIDTH) {
+        if (next_beam.size() > (size_t)BEAM_WIDTH) {
             next_beam.resize(BEAM_WIDTH);
         }
         current_beam = next_beam;
@@ -403,9 +466,56 @@ int main() {
     }
 
     // --- 5. 最終解の選択 ---
+    if (current_beam.empty()) {
+         // ビームが完全にロストした場合 (T厳しすぎなど)
+         // 仕方ないので、全区間 BFS 最短経路で埋める (T無視)
+         cerr << "Warning: Beam search failed. Using BFS fallback." << endl;
+         set<Pos> fallback_cells = {TARGETS[0]};
+         int fallback_steps = 0;
+         for (int k = 0; k < K - 1; ++k) {
+             if (!all_shortest_paths_fallback[k].empty()) {
+                fallback_cells.insert(all_shortest_paths_fallback[k].begin(), all_shortest_paths_fallback[k].end());
+                fallback_steps += shortest_lengths[k];
+             }
+         }
+         int fallback_C = fallback_cells.size() + 1;
+         current_beam.push_back({all_shortest_paths_fallback, fallback_cells, fallback_steps, fallback_C});
+    }
+
     BeamState best_solution = current_beam[0];
+    
+    // ビームサーチで全ての k が埋まらなかった場合 (時間切れ or 到達不能)
+    // 埋まらなかった k を BFS 最短で埋める (T超過の可能性あり)
+    bool needs_fallback_fill = false;
+    for (int k = 0; k < K - 1; ++k) {
+        if (best_solution.paths_list[k].empty()) {
+            if (shortest_lengths[k] < 1e9 && !all_shortest_paths_fallback[k].empty()) {
+                best_solution.paths_list[k] = all_shortest_paths_fallback[k];
+                needs_fallback_fill = true;
+            }
+        }
+    }
+    if (needs_fallback_fill) {
+         // 簡易再計算
+         best_solution.path_cells.clear();
+         best_solution.path_cells.insert(TARGETS[0]);
+         best_solution.total_steps = 0;
+         for (const auto& path : best_solution.paths_list) {
+             if (!path.empty()) {
+                 best_solution.path_cells.insert(path.begin(), path.end());
+                 best_solution.total_steps += (path.size() - 1);
+             }
+         }
+         best_solution.total_C = best_solution.path_cells.size() + 1;
+    }
+
     int C_val = best_solution.total_C;
     int Q_val = K;
+    
+    // デバッグ出力
+    cerr << "Final C: " << C_val << endl;
+    cerr << "Final Steps: " << best_solution.total_steps << " (T=" << T << ")" << endl;
+
 
     // --- 6. 色の割り当てと遷移規則の生成 ---
     map<Pos, int> color_map;
@@ -415,7 +525,6 @@ int main() {
             color_map[cell] = current_color++;
         }
     }
-    // C_val は best_solution.total_C (== current_color) を使う
 
     vector<vector<int>> initial_board(N, vector<int>(N, 0));
     for (auto const& [pos, color] : color_map) {

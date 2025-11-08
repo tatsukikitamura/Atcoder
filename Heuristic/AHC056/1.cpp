@@ -17,8 +17,8 @@ vector<string> H_WALLS;
 vector<pair<int, int>> TARGETS;
 
 // ビームサーチ設定 (Pythonコードから)
-int BEAM_WIDTH = 5;
-int N_PATHS_PER_STATE = 3;
+int BEAM_WIDTH = 10;
+int N_PATHS_PER_STATE = 7;
 
 // 型定義
 using Pos = pair<int, int>; 
