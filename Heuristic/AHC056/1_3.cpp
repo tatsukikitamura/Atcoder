@@ -257,7 +257,7 @@ vector<DijkstraResult> find_path_dijkstra_beam(
     }
 
     sort(found_goals.begin(), found_goals.end());
-    if (found_goals.size() > N_PATHS_PER_STATE) {
+    if (found_goals.size() > static_cast<size_t>(N_PATHS_PER_STATE)) {
         found_goals.resize(N_PATHS_PER_STATE);
     }
 
@@ -313,42 +313,59 @@ int main() {
     for (int i = 0; i < K; ++i) cin >> TARGETS[i].first >> TARGETS[i].second;
 
     // --- ★ パラメータ調整: Kの値に応じて計算量を削減 ★ ---
-    if (K >= 350) {
-        BEAM_WIDTH = 6;
-        N_PATHS_PER_STATE = 3;
-    } else if (K >= 300) {
-        BEAM_WIDTH = 8;
-        N_PATHS_PER_STATE = 4;
-    } else if (K >= 275) {
-        BEAM_WIDTH = 10;
-        N_PATHS_PER_STATE = 5;
-    } else if (K >= 250) {
-        BEAM_WIDTH = 12;
-        N_PATHS_PER_STATE = 6;
-    } else if (K >= 225) {
-        BEAM_WIDTH = 13;
-        N_PATHS_PER_STATE = 6;
-    } else if (K >= 200) {
-        BEAM_WIDTH = 14;
-        N_PATHS_PER_STATE = 7;
-    }
-
+    // Kの「個数」ではなく、盤面サイズに対する「密度」で判定する
+    // 旧しきい値（K >= 350, 300, 275, 250, 225, 200）は N=20 基準で
+    // それぞれ密度 0.875, 0.75, 0.6875, 0.625, 0.5625, 0.5 に相当
+    double density = static_cast<double>(K) / (static_cast<double>(N) * static_cast<double>(N));
+    
     // --- ★ パラメータ調整: Nが大きい場合にさらに計算量を削減 ★ ---
     if (N >= 19) {
         // Nが大きい場合は、さらにパラメータを削減
-        if (K >= 200) {
-            BEAM_WIDTH = min(BEAM_WIDTH, 8);
-            N_PATHS_PER_STATE = min(N_PATHS_PER_STATE, 4);
-        } else if (K >= 150) {
-            BEAM_WIDTH = min(BEAM_WIDTH, 12);
-            N_PATHS_PER_STATE = min(N_PATHS_PER_STATE, 6);
-        } else if (K >= 100) {
-            BEAM_WIDTH = min(BEAM_WIDTH, 14);
-            N_PATHS_PER_STATE = min(N_PATHS_PER_STATE, 7);
+        // 旧Kしきい値 (200, 150, 100) は N=20 を基準に密度 (0.5, 0.375, 0.25)
+        if (density >= 0.75) {
+            BEAM_WIDTH =  5;
+            N_PATHS_PER_STATE = 3;
+        } 
+        else if (density >= 0.625) {
+            BEAM_WIDTH =  6;
+            N_PATHS_PER_STATE = 3;
+        } 
+        else if (density >= 0.5) {
+            BEAM_WIDTH =  7;
+            N_PATHS_PER_STATE = 4;
+        } 
+        else {
+            BEAM_WIDTH = 8;
+            N_PATHS_PER_STATE = 4;
+        }
+    } else if (N >= 17) {
+        if (density >= 0.875) {
+            BEAM_WIDTH = 6;
+            N_PATHS_PER_STATE = 3;
+        } else if (density >= 0.75) {
+            BEAM_WIDTH = 8;
+            N_PATHS_PER_STATE = 4;
+        } else if (density >= 0.5) {
+            BEAM_WIDTH = 9;
+            N_PATHS_PER_STATE = 5;
         } else {
-            // K < 100でもNが大きい場合は削減
-            BEAM_WIDTH = min(BEAM_WIDTH, 16);
-            N_PATHS_PER_STATE = min(N_PATHS_PER_STATE, 8);
+            // density < 0.5 の場合も適切なパラメータを設定（デフォルト値は大きすぎる）
+            BEAM_WIDTH = 10;
+            N_PATHS_PER_STATE = 5;
+        }
+    } else {
+        if (density >= 0.875) {
+            BEAM_WIDTH = 8;
+            N_PATHS_PER_STATE = 4;
+        } else if (density >= 0.75) {
+            BEAM_WIDTH = 9;
+            N_PATHS_PER_STATE = 5;
+        } else if (density >= 0.5) {
+            BEAM_WIDTH = 11;
+            N_PATHS_PER_STATE = 6;
+        } else {
+            BEAM_WIDTH = 14;
+            N_PATHS_PER_STATE = 7;
         }
     }
 
@@ -573,7 +590,7 @@ int main() {
 
         // 4.5. 枝刈り (変更なし)
         sort(next_beam.begin(), next_beam.end());
-        if (next_beam.size() > BEAM_WIDTH) {
+        if (next_beam.size() > static_cast<size_t>(BEAM_WIDTH)) {
             next_beam.resize(BEAM_WIDTH);
         }
         current_beam = next_beam;

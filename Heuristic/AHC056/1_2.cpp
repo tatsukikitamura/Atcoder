@@ -345,7 +345,7 @@ int main() {
         } else if (density >= 0.75) {
             BEAM_WIDTH = 8;
             N_PATHS_PER_STATE = 4;
-        } else if {
+        } else if (density >= 0.5) {
             BEAM_WIDTH = 9;
             N_PATHS_PER_STATE = 5;
         } else {
@@ -353,19 +353,38 @@ int main() {
             BEAM_WIDTH = 10;
             N_PATHS_PER_STATE = 5;
         }
-    } else {
+    } else if (N >= 15) {
         if (density >= 0.875) {
+            BEAM_WIDTH = 6;
+            N_PATHS_PER_STATE = 3;
+        } else if (density >= 0.75) {
             BEAM_WIDTH = 8;
             N_PATHS_PER_STATE = 4;
-        } else if (density >= 0.75) {
+        } else if (density >= 0.5) {
             BEAM_WIDTH = 9;
             N_PATHS_PER_STATE = 5;
         } else if (density >= 0.5) {
-            BEAM_WIDTH = 11;
+            BEAM_WIDTH = 10;
+            N_PATHS_PER_STATE = 5;
+        }
+        else {
+            BEAM_WIDTH = 10;
+            N_PATHS_PER_STATE = 5;
+        }
+    }
+     else {
+        if (density >= 0.875) {
+            BEAM_WIDTH = 10;
+            N_PATHS_PER_STATE = 5;
+        } else if (density >= 0.75) {
+            BEAM_WIDTH = 12;
             N_PATHS_PER_STATE = 6;
-        } else {
-            BEAM_WIDTH = 14:
+        } else if (density >= 0.5) {
+            BEAM_WIDTH = 14;
             N_PATHS_PER_STATE = 7;
+        } else {
+            BEAM_WIDTH = 16;
+            N_PATHS_PER_STATE = 8;
         }
     }
 

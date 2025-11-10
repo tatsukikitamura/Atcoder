@@ -7,76 +7,51 @@
 #include <map>
 #include <tuple>
 #include <algorithm>
-#include <chrono> // 時間管理
-#include <random> // ランダム
-#include <cmath>  // exp
+#include <chrono>
 
 using namespace std;
-using namespace std::chrono;
-
-// 型定義
-using Pos = pair<int, int>; 
-using Edge = pair<Pos, Pos>; 
-using DijkstraResult = tuple<int, int, vector<Pos>>;
 
 // --- 1. グローバル変数と設定 ---
 int N, K, T;
 vector<string> V_WALLS;
 vector<string> H_WALLS;
 vector<pair<int, int>> TARGETS;
-set<Pos> TARGET_SET; 
-double TIME_LIMIT_SEC = 1.8; 
-auto start_time = high_resolution_clock::now(); 
 
-// ビームサーチ設定
-int BEAM_WIDTH = 10;
-int N_PATHS_PER_STATE = 5;
+int BEAM_WIDTH = 20;
+int N_PATHS_PER_STATE = 10;
 
-// ILS (フェーズ2) 設定
-int N_KICK = 20; 
-const double START_TEMP = 5;
-const double END_TEMP = 0.001;
+using Pos = pair<int, int>; 
+using Edge = pair<Pos, Pos>; 
 
-// ### TLE修正 2 ###: ダイクストラのステップ数上限 (ヒューリスティック)
-const int DIJKSTRA_STEP_CAP = 100;
-
-// --- 4.0. 構造体の定義 (main の外) ---
-struct BeamState {
-    vector<vector<Pos>> paths_list;
-    set<Pos> path_cells;
-    int total_steps;
-    int total_C;
-    bool operator<(const BeamState& other) const {
-        if (total_C != other.total_C) return total_C < other.total_C;
-        return total_steps < other.total_steps;
-    }
-};
-
-struct Segment {
-    int k; 
-    int X_k; 
-    vector<Pos> path_k; 
-    double freedom;
-    bool operator<(const Segment& other) const {
-        return freedom < other.freedom;
-    }
-};
-
-// --- 2. ヘルパー関数 ---
+// --- 2. ヘルパー関数 (変更なし) ---
 bool can_move(int i, int j, char d) {
-    if (d == 'U') { if (i == 0) return false; return H_WALLS[i - 1][j] == '0'; }
-    if (d == 'D') { if (i == N - 1) return false; return H_WALLS[i][j] == '0'; }
-    if (d == 'L') { if (j == 0) return false; return V_WALLS[i][j - 1] == '0'; }
-    if (d == 'R') { if (j == N - 1) return false; return V_WALLS[i][j] == '0'; }
+    if (d == 'U') {
+        if (i == 0) return false;
+        return H_WALLS[i - 1][j] == '0';
+    }
+    if (d == 'D') {
+        if (i == N - 1) return false;
+        return H_WALLS[i][j] == '0';
+    }
+    if (d == 'L') {
+        if (j == 0) return false;
+        return V_WALLS[i][j - 1] == '0';
+    }
+    if (d == 'R') {
+        if (j == N - 1) return false;
+        return V_WALLS[i][j] == '0';
+    }
     return false;
 }
+
 Pos get_next_pos(int i, int j, char d) {
     if (d == 'U') return {i - 1, j};
     if (d == 'D') return {i + 1, j};
     if (d == 'L') return {i, j - 1};
     if (d == 'R') return {i, j + 1};
-    return {i, j}; 
+    return {i, j};
 }
+
 char get_direction(Pos pos1, Pos pos2) {
     if (pos2.first < pos1.first) return 'U';
     if (pos2.first > pos1.first) return 'D';
@@ -85,62 +60,60 @@ char get_direction(Pos pos1, Pos pos2) {
     return 'S';
 }
 
-// --- 3. BFS ---
-// ### TLE修正 1 ###: 経路コピーを削除し、prevで経路復元
+
+// --- 3. BFS (変更なし) ---
 pair<int, vector<Pos>> bfs_path_and_length(Pos start_pos, Pos goal_pos) {
-    deque<Pos> q;
-    q.push_back(start_pos);
-    map<Pos, Pos> prev;
-    map<Pos, int> dist;
-    dist[start_pos] = 0;
-    
-    int steps = -1;
+    deque<pair<Pos, vector<Pos>>> q;
+    q.push_back({start_pos, {start_pos}});
+    set<Pos> visited = {start_pos};
 
     while (!q.empty()) {
-        Pos pos = q.front(); q.pop_front();
+        Pos pos;
+        vector<Pos> path;
+        tie(pos, path) = q.front();
+        q.pop_front();
+
         if (pos == goal_pos) {
-            steps = dist[pos];
-            break;
+            return {(int)path.size() - 1, path};
         }
+
         for (char d : {'U', 'D', 'L', 'R'}) {
             if (can_move(pos.first, pos.second, d)) {
                 Pos next_pos = get_next_pos(pos.first, pos.second, d);
-                if (dist.find(next_pos) == dist.end()) { // 未訪問
-                    dist[next_pos] = dist[pos] + 1;
-                    prev[next_pos] = pos;
-                    q.push_back(next_pos);
+                if (visited.find(next_pos) == visited.end()) {
+                    visited.insert(next_pos);
+                    vector<Pos> new_path = path;
+                    new_path.push_back(next_pos);
+                    q.push_back({next_pos, new_path});
                 }
             }
         }
     }
-
-    if (steps == -1) return {1e9, {}}; // 到達不能
-
-    // 経路復元
-    vector<Pos> path;
-    Pos curr_pos = goal_pos;
-    while (curr_pos != start_pos) {
-        path.push_back(curr_pos);
-        curr_pos = prev[curr_pos];
-    }
-    path.push_back(start_pos);
-    reverse(path.begin(), path.end());
-    
-    return {steps, path};
+    return {1e9, {}};
 }
 
 int bfs_second_path_length(Pos start_pos, Pos goal_pos, set<Edge>& forbidden_edges) {
     deque<pair<Pos, int>> q;
     q.push_back({start_pos, 0});
     set<Pos> visited = {start_pos};
+
     while (!q.empty()) {
-        auto [pos, steps] = q.front(); q.pop_front();
-        if (pos == goal_pos) return steps;
+        Pos pos;
+        int steps;
+        tie(pos, steps) = q.front();
+        q.pop_front();
+
+        if (pos == goal_pos) {
+            return steps;
+        }
+
         for (char d : {'U', 'D', 'L', 'R'}) {
             if (can_move(pos.first, pos.second, d)) {
                 Pos next_pos = get_next_pos(pos.first, pos.second, d);
                 Edge edge = {pos, next_pos};
-                if (forbidden_edges.count(edge)) continue;
+                if (forbidden_edges.count(edge)) {
+                    continue;
+                }
                 if (visited.find(next_pos) == visited.end()) {
                     visited.insert(next_pos);
                     q.push_back({next_pos, steps + 1});
@@ -151,16 +124,19 @@ int bfs_second_path_length(Pos start_pos, Pos goal_pos, set<Edge>& forbidden_edg
     return 1e9;
 }
 
-// --- 3.5. 経路復元ヘルパー ---
+
+// --- 3.6. パレート最適ダイクストラ (★ forbidden_cells 追加) ---
+
+using DijkstraResult = tuple<long long, int, vector<Pos>>;
+
 vector<Pos> reconstruct_path(map<Pos, map<int, pair<Pos, int>>>& prev, Pos start_pos, Pos goal_pos, int steps) {
     vector<Pos> path;
     Pos curr_pos = goal_pos;
     int curr_steps = steps;
     while (true) {
         path.push_back(curr_pos);
-        if (curr_pos == start_pos && curr_steps == 0) break;
-        if (prev.find(curr_pos) == prev.end() || prev[curr_pos].find(curr_steps) == prev[curr_pos].end()) {
-             return {}; // 経路復元失敗
+        if (curr_pos == start_pos && curr_steps == 0) {
+            break;
         }
         auto p = prev[curr_pos][curr_steps];
         curr_pos = p.first;
@@ -170,49 +146,92 @@ vector<Pos> reconstruct_path(map<Pos, map<int, pair<Pos, int>>>& prev, Pos start
     return path;
 }
 
-// --- 3.6. パレート最適ダイクストラ (ローカルサーチ用 - 単一解) ---
-vector<Pos> find_path_dijkstra_single(Pos start_pos, Pos goal_pos, int step_limit, const set<Pos>& total_path_cells, const Pos& forbidden_cell) {
-    using State = tuple<int, int, Pos>;
+// ★ 復活: スケールとヒューリスティック
+const long long BASE_COST_SCALE = 1000;
+const long long HEURISTIC_WEIGHT = 1;
+const long long LOOP_PENALTY_WEIGHT = 1500; // ★ 2列通路ペナルティ（大幅増加）
+const int LOOP_PENALTY_THRESHOLD = 5; // ★ ターゲットからの距離閾値（より多くのマスに適用）
+
+vector<DijkstraResult> find_path_dijkstra_beam(
+    Pos start_pos, Pos goal_pos, int step_limit, 
+    const set<Pos>& total_path_cells,
+    const vector<vector<int>>& potential_map, // ★ 復活: int型
+    const vector<vector<bool>>& forbidden_cells, // ★ 新規追加
+    const vector<vector<int>>& freedom // ★ 2列通路ペナルティ用
+) {
+    
+    using State = tuple<long long, int, Pos>;
     priority_queue<State, vector<State>, greater<State>> pq;
     pq.push({0, 0, start_pos});
-    map<Pos, map<int, int>> dist;
+
+    map<Pos, map<int, long long>> dist;
     dist[start_pos][0] = 0;
+
     map<Pos, map<int, pair<Pos, int>>> prev;
-    vector<pair<int, int>> found_goals; 
+
+    vector<pair<long long, int>> found_goals;
 
     while (!pq.empty()) {
-        auto [cost, steps, pos] = pq.top(); pq.pop();
-        if (dist.count(pos) && dist[pos].count(steps) && dist[pos][steps] < cost) continue;
+        long long cost; 
+        int steps;
+        Pos pos;
+        tie(cost, steps, pos) = pq.top();
+        pq.pop();
+
+        if (dist.count(pos) && dist[pos].count(steps) && dist[pos][steps] < cost) {
+            continue;
+        }
+
         if (pos == goal_pos) {
             found_goals.push_back({cost, steps});
             continue;
         }
-        if (steps + 1 > step_limit) continue; // ### TLE修正 2 ### (step_limit は呼び出し元でキャップ済み)
 
-        auto current_time = high_resolution_clock::now();
-        if (duration_cast<duration<double>>(current_time - start_time).count() > TIME_LIMIT_SEC) {
-            break; 
+        if (steps + 1 > step_limit) {
+            continue;
         }
 
         for (char d : {'U', 'D', 'L', 'R'}) {
             if (can_move(pos.first, pos.second, d)) {
                 Pos next_pos = get_next_pos(pos.first, pos.second, d);
-                if (next_pos == forbidden_cell) continue; 
+
+                // --- ★★★ 禁止マス チェック ★★★ ---
+                if (forbidden_cells[next_pos.first][next_pos.second]) {
+                    continue;
+                }
+                // --- ★★★ チェックここまで ★★★
 
                 int next_steps = steps + 1;
-                int new_cost = cost;
+                long long new_cost = cost; 
+                
                 if (total_path_cells.find(next_pos) == total_path_cells.end()) {
-                    new_cost += 1;
+                    // ★ 復活: 「最近傍」ヒューリスティック
+                    new_cost += BASE_COST_SCALE; 
+                    new_cost += HEURISTIC_WEIGHT * potential_map[next_pos.first][next_pos.second];
+                    
+                    // ★★★ 2列通路ペナルティ (ソフトペナルティ) ★★★
+                    // 「ターゲットから遠い、自由度2のマス」は、
+                    // 価値の低い2列通路の可能性が高いので、追加ペナルティ
+                    if (freedom[next_pos.first][next_pos.second] == 2 && 
+                        potential_map[next_pos.first][next_pos.second] >= LOOP_PENALTY_THRESHOLD) {
+                        new_cost += LOOP_PENALTY_WEIGHT;
+                    }
                 }
+
+                // (ドミネーションチェックは変更なし)
                 bool is_dominated = false;
                 if (dist.count(next_pos)) {
                     for (auto const& [existing_steps, existing_cost] : dist[next_pos]) {
                         if (existing_steps <= next_steps && existing_cost <= new_cost) {
-                            is_dominated = true; break;
+                            is_dominated = true;
+                            break;
                         }
                     }
                 }
-                if (is_dominated) continue;
+                if (is_dominated) {
+                    continue;
+                }
+
                 if (dist.count(next_pos)) {
                     vector<int> dominated_steps;
                     for (auto const& [existing_steps, existing_cost] : dist[next_pos]) {
@@ -225,393 +244,400 @@ vector<Pos> find_path_dijkstra_single(Pos start_pos, Pos goal_pos, int step_limi
                         prev[next_pos].erase(s);
                     }
                 }
+
                 dist[next_pos][next_steps] = new_cost;
                 prev[next_pos][next_steps] = {pos, steps};
                 pq.push({new_cost, next_steps, next_pos});
             }
         }
     }
-    if (found_goals.empty()) return {}; // None
-    sort(found_goals.begin(), found_goals.end());
-    return reconstruct_path(prev, start_pos, goal_pos, found_goals[0].second);
-}
 
-
-// --- 3.7. パレート最適ダイクストラ (ビームサーチ用 - 複数解) ---
-vector<DijkstraResult> find_path_dijkstra_beam(Pos start_pos, Pos goal_pos, int step_limit, const set<Pos>& total_path_cells) {
-    using State = tuple<int, int, Pos>;
-    priority_queue<State, vector<State>, greater<State>> pq;
-    pq.push({0, 0, start_pos});
-    map<Pos, map<int, int>> dist;
-    dist[start_pos][0] = 0;
-    map<Pos, map<int, pair<Pos, int>>> prev;
-    vector<pair<int, int>> found_goals;
-
-    while (!pq.empty()) {
-        auto [cost, steps, pos] = pq.top(); pq.pop();
-        if (dist.count(pos) && dist[pos].count(steps) && dist[pos][steps] < cost) continue;
-        if (pos == goal_pos) {
-            found_goals.push_back({cost, steps});
-            continue;
-        }
-        if (steps + 1 > step_limit) continue; // ### TLE修正 2 ### (step_limit は呼び出し元でキャップ済み)
-
-        for (char d : {'U', 'D', 'L', 'R'}) {
-            if (can_move(pos.first, pos.second, d)) {
-                Pos next_pos = get_next_pos(pos.first, pos.second, d);
-                int next_steps = steps + 1;
-                int new_cost = cost;
-                if (total_path_cells.find(next_pos) == total_path_cells.end()) {
-                    new_cost += 1;
-                }
-                bool is_dominated = false;
-                if (dist.count(next_pos)) {
-                    for (auto const& [existing_steps, existing_cost] : dist[next_pos]) {
-                        if (existing_steps <= next_steps && existing_cost <= new_cost) {
-                            is_dominated = true; break;
-                        }
-                    }
-                }
-                if (is_dominated) continue;
-                if (dist.count(next_pos)) {
-                    vector<int> dominated_steps;
-                    for (auto const& [existing_steps, existing_cost] : dist[next_pos]) {
-                        if (existing_steps >= next_steps && existing_cost >= new_cost) {
-                            dominated_steps.push_back(existing_steps);
-                        }
-                    }
-                    for (int s : dominated_steps) {
-                        dist[next_pos].erase(s);
-                        prev[next_pos].erase(s);
-                    }
-                }
-                dist[next_pos][next_steps] = new_cost;
-                prev[next_pos][next_steps] = {pos, steps};
-                pq.push({new_cost, next_steps, next_pos});
-            }
-        }
+    if (found_goals.empty()) {
+        return {}; // None
     }
-    if (found_goals.empty()) return {};
+
     sort(found_goals.begin(), found_goals.end());
-    if (found_goals.size() > (size_t)N_PATHS_PER_STATE) {
+    if (found_goals.size() > static_cast<size_t>(N_PATHS_PER_STATE)) {
         found_goals.resize(N_PATHS_PER_STATE);
     }
+
     vector<DijkstraResult> results;
     for (auto const& [cost, steps] : found_goals) {
         vector<Pos> path = reconstruct_path(prev, start_pos, goal_pos, steps);
-        if (!path.empty()) { // 経路復元成功
-            results.emplace_back(cost, steps, path);
-        }
+        results.emplace_back(cost, steps, path);
     }
     return results;
 }
 
-// ヘルパー: BeamState の C と steps を再計算
-// (ILSのキック後など、差分計算が難しい場合に使用)
-void recalculate_state(BeamState& state) {
-    state.path_cells.clear();
-    state.path_cells.insert(TARGETS[0]);
-    state.total_steps = 0;
-    for (const auto& path : state.paths_list) {
-        if (!path.empty()) {
-            state.path_cells.insert(path.begin(), path.end());
-            state.total_steps += (path.size() - 1);
+
+// --- 4. メインロジック (ビームサーチ) ---
+
+struct BeamState {
+    vector<vector<Pos>> paths_list;
+    set<Pos> path_cells;
+    int total_steps;
+    int total_C;
+
+    bool operator<(const BeamState& other) const {
+        if (total_C != other.total_C) {
+            return total_C < other.total_C;
         }
+        return total_steps < other.total_steps;
     }
-    state.total_C = state.path_cells.size() + 1; // +1 for dummy color 0
-}
+};
+
+struct Segment {
+    int k;
+    int X_k;
+    vector<Pos> path_k;
+    double freedom;
+
+    bool operator<(const Segment& other) const {
+        return freedom < other.freedom;
+    }
+};
 
 
 int main() {
+    auto start_time = chrono::high_resolution_clock::now();
+    
     ios::sync_with_stdio(false);
     cin.tie(NULL);
 
     cin >> N >> K >> T;
-    V_WALLS.resize(N); H_WALLS.resize(N - 1); TARGETS.resize(K);
+    V_WALLS.resize(N);
+    H_WALLS.resize(N - 1);
+    TARGETS.resize(K);
     for (int i = 0; i < N; ++i) cin >> V_WALLS[i];
     for (int i = 0; i < N - 1; ++i) cin >> H_WALLS[i];
-    for (int i = 0; i < K; ++i) {
-        cin >> TARGETS[i].first >> TARGETS[i].second;
-        TARGET_SET.insert(TARGETS[i]); 
+    for (int i = 0; i < K; ++i) cin >> TARGETS[i].first >> TARGETS[i].second;
+
+    // --- ★ パラメータ調整: Kの値に応じて計算量を削減 ★ ---
+    // Kの「個数」ではなく、盤面サイズに対する「密度」で判定する
+    // 旧しきい値（K >= 350, 300, 275, 250, 225, 200）は N=20 基準で
+    // それぞれ密度 0.875, 0.75, 0.6875, 0.625, 0.5625, 0.5 に相当
+    double density = static_cast<double>(K) / (static_cast<double>(N) * static_cast<double>(N));
+    
+    // --- ★ パラメータ調整: Nが大きい場合にさらに計算量を削減 ★ ---
+    if (N >= 19) {
+        // Nが大きい場合は、さらにパラメータを削減
+        // 旧Kしきい値 (200, 150, 100) は N=20 を基準に密度 (0.5, 0.375, 0.25)
+        if (density >= 0.75) {
+            BEAM_WIDTH =  5;
+            N_PATHS_PER_STATE = 3;
+        } 
+        else if (density >= 0.625) {
+            BEAM_WIDTH =  6;
+            N_PATHS_PER_STATE = 3;
+        } 
+        else if (density >= 0.5) {
+            BEAM_WIDTH =  7;
+            N_PATHS_PER_STATE = 4;
+        } 
+        else {
+            BEAM_WIDTH = 8;
+            N_PATHS_PER_STATE = 4;
+        }
+    } else if (N >= 17) {
+        if (density >= 0.875) {
+            BEAM_WIDTH = 6;
+            N_PATHS_PER_STATE = 3;
+        } else if (density >= 0.75) {
+            BEAM_WIDTH = 8;
+            N_PATHS_PER_STATE = 4;
+        } else if (density >= 0.5) {
+            BEAM_WIDTH = 9;
+            N_PATHS_PER_STATE = 5;
+        } else {
+            // density < 0.5 の場合も適切なパラメータを設定（デフォルト値は大きすぎる）
+            BEAM_WIDTH = 10;
+            N_PATHS_PER_STATE = 5;
+        }
+    } else {
+        if (density >= 0.875) {
+            BEAM_WIDTH = 8;
+            N_PATHS_PER_STATE = 4;
+        } else if (density >= 0.75) {
+            BEAM_WIDTH = 9;
+            N_PATHS_PER_STATE = 5;
+        } else if (density >= 0.5) {
+            BEAM_WIDTH = 11;
+            N_PATHS_PER_STATE = 6;
+        } else {
+            BEAM_WIDTH = 14;
+            N_PATHS_PER_STATE = 7;
+        }
     }
 
-    // --- 4.1. 全区間の自由度を計算 ---
+    // --- ★ 4.0. 潜在価値マップの計算 (★「最近傍」ロジックに戻す) ---
+    vector<vector<int>> potential_map(N, vector<int>(N, 1e9));
+    queue<Pos> q_potential;
+    for (int k = 0; k < K; ++k) {
+        Pos target = TARGETS[k];
+        if (potential_map[target.first][target.second] > 0) {
+            potential_map[target.first][target.second] = 0;
+            q_potential.push(target);
+        }
+    }
+    
+    while (!q_potential.empty()) {
+        Pos pos = q_potential.front();
+        q_potential.pop();
+        int current_dist = potential_map[pos.first][pos.second];
+
+        for (char d : {'U', 'D', 'L', 'R'}) {
+            if (can_move(pos.first, pos.second, d)) {
+                Pos next_pos = get_next_pos(pos.first, pos.second, d);
+                if (potential_map[next_pos.first][next_pos.second] == 1e9) {
+                    potential_map[next_pos.first][next_pos.second] = current_dist + 1;
+                    q_potential.push(next_pos);
+                }
+            }
+        }
+    }
+    // --- ★ 4.0. ここまで ★ ---
+
+
+    // --- ★★★ 4.1. 禁止マス(袋小路の奥)の計算 (新規追加) ★★★ ---
+    vector<vector<int>> freedom(N, vector<int>(N, 0));
+    vector<vector<bool>> is_target(N, vector<bool>(N, false));
+    for(int k=0; k<K; ++k) is_target[TARGETS[k].first][TARGETS[k].second] = true;
+
+    vector<Pos> leafs;
+    for (int i = 0; i < N; ++i) {
+        for (int j = 0; j < N; ++j) {
+            for (char d : {'U', 'D', 'L', 'R'}) {
+                if (can_move(i, j, d)) freedom[i][j]++;
+            }
+            // 自由度1 (袋小路の先端) かつ ターゲットではないマス を「葉」とする
+            if (freedom[i][j] == 1 && !is_target[i][j]) {
+                leafs.push_back({i, j});
+            }
+        }
+    }
+
+    vector<vector<bool>> forbidden_cells(N, vector<bool>(N, false));
+    vector<vector<bool>> visited_trace(N, vector<bool>(N, false));
+
+    for (const auto& leaf : leafs) {
+        if (visited_trace[leaf.first][leaf.second]) continue;
+
+        vector<Pos> path;
+        Pos curr = leaf;
+        Pos prev = {-1, -1};
+        bool path_is_useless = true; // 仮に「不要」と設定
+
+        while (true) {
+            visited_trace[curr.first][curr.second] = true;
+            path.push_back(curr);
+            
+            Pos next_neighbor = {-1, -1};
+            for (char d : {'U', 'D', 'L', 'R'}) {
+                if (can_move(curr.first, curr.second, d)) {
+                    Pos next = get_next_pos(curr.first, curr.second, d);
+                    if (next != prev) {
+                        next_neighbor = next;
+                        break; // 自由度2以下なら隣人は1人(来た道以外)のはず
+                    }
+                }
+            }
+
+            if (next_neighbor == Pos{-1, -1}) {
+                // どこにも行けない (freedom=1 だが壁に囲まれている？)
+                break;
+            }
+
+            if (is_target[next_neighbor.first][next_neighbor.second]) {
+                // ターゲットに突き当たった -> このパスは「不要」で確定
+                path_is_useless = true; 
+                break;
+            }
+            if (freedom[next_neighbor.first][next_neighbor.second] > 2) {
+                // 合流地点(交差点)に着いた -> このパスは「必要」(メイン経路)
+                path_is_useless = false; 
+                break;
+            }
+            if (visited_trace[next_neighbor.first][next_neighbor.second]) {
+                // 既に探索済みのパスに合流した -> 「必要」と見なす
+                path_is_useless = false; 
+                break;
+            }
+            
+            // 自由度2の通路が続く
+            prev = curr;
+            curr = next_neighbor;
+        }
+
+        if (path_is_useless) {
+            // このパスは「袋小路の奥」と認定
+            for (const auto& p : path) {
+                forbidden_cells[p.first][p.second] = true;
+            }
+        }
+    }
+    // --- ★★★ 4.1. ここまで ★★★
+
+
+    // 4.2. 全区間の自由度を計算 (変更なし)
     vector<Segment> segments_info;
     double total_shortest_steps_X = 0;
     vector<int> shortest_lengths(K - 1);
     vector<vector<Pos>> all_shortest_paths_fallback(K - 1);
 
     for (int k = 0; k < K - 1; ++k) {
-        Pos start_node = TARGETS[k], goal_node = TARGETS[k + 1];
-        // ### TLE修正 1 ###: 高速化されたBFSを使用
+        Pos start_node = TARGETS[k];
+        Pos goal_node = TARGETS[k + 1];
+
         auto [X_k, path_k] = bfs_path_and_length(start_node, goal_node);
         all_shortest_paths_fallback[k] = path_k;
         shortest_lengths[k] = X_k;
+        
         double freedom_score = 1e18;
-        if (X_k < 1e9 && !path_k.empty()) {
+        if (X_k < 1e9) {
             total_shortest_steps_X += X_k;
             set<Edge> forbidden_edges;
-            for (size_t i = 0; i < path_k.size() - 1; ++i) forbidden_edges.insert({path_k[i], path_k[i+1]});
+            for (size_t i = 0; i < path_k.size() - 1; ++i) {
+                forbidden_edges.insert({path_k[i], path_k[i+1]});
+            }
             int X_prime_k = bfs_second_path_length(start_node, goal_node, forbidden_edges);
             freedom_score = (double)X_prime_k - X_k;
         }
         segments_info.push_back({k, X_k, path_k, freedom_score});
     }
 
-    // --- 4.2. 自由度が「低い」順にソート ---
+    // 4.3. 自由度が「低い」順にソート (変更なし)
     sort(segments_info.begin(), segments_info.end());
 
-    // --- 4.3. フェーズ1: ビームサーチ ---
+    // 4.4. ビームサーチの実行
     vector<BeamState> current_beam;
     set<Pos> initial_cells = {TARGETS[0]};
     int initial_C = initial_cells.size() + 1; 
     current_beam.push_back({vector<vector<Pos>>(K - 1), initial_cells, 0, initial_C});
+
     double X_future = total_shortest_steps_X;
 
     for (const auto& segment : segments_info) {
-        int k = segment.k; int X_k = segment.X_k;
+        int k = segment.k;
+        int X_k = segment.X_k;
+        vector<Pos> path_k_fallback = segment.path_k;
+
         if (X_k >= 1e9) continue;
-        Pos start_node = TARGETS[k], goal_node = TARGETS[k + 1];
+        
+        Pos start_node = TARGETS[k];
+        Pos goal_node = TARGETS[k + 1];
+        
         vector<BeamState> next_beam;
 
         for (const auto& state : current_beam) {
+            
             double steps_allowed_total = T - state.total_steps;
             double margin_for_future = X_future - X_k;
             int step_limit = (int)(steps_allowed_total - margin_for_future);
-            if (step_limit < X_k) step_limit = X_k;
-            
-            // ### TLE修正 2 ###: 状態爆発を防ぐため、ステップ数に上限を設ける
-            step_limit = min(step_limit, X_k + DIJKSTRA_STEP_CAP);
-
-            vector<DijkstraResult> candidate_paths_info = find_path_dijkstra_beam(start_node, goal_node, step_limit, state.path_cells);
+            if (step_limit < X_k) {
+                step_limit = X_k;
+            }
+                
+            // ★変更: forbidden_cells と freedom を渡す
+            vector<DijkstraResult> candidate_paths_info = find_path_dijkstra_beam(
+                start_node, 
+                goal_node, 
+                step_limit, 
+                state.path_cells,
+                potential_map,
+                forbidden_cells, // ★追加
+                freedom // ★ 2列通路ペナルティ用
+            );
             
             if (candidate_paths_info.empty()) {
-                int cost = 0;
-                for (const auto& cell : segment.path_k) {
-                    if (state.path_cells.find(cell) == state.path_cells.end()) cost += 1;
+                long long cost = 0; 
+                bool is_forbidden = false;
+                for (const auto& cell : path_k_fallback) {
+                    // ★追加: フォールバックが禁止マスを通るかチェック
+                    if (forbidden_cells[cell.first][cell.second]) {
+                        is_forbidden = true;
+                    }
+                    if (state.path_cells.find(cell) == state.path_cells.end()) {
+                        cost += BASE_COST_SCALE; 
+                        cost += HEURISTIC_WEIGHT * potential_map[cell.first][cell.second];
+                        // ★★★ 2列通路ペナルティ (フォールバック用) ★★★
+                        if (freedom[cell.first][cell.second] == 2 && 
+                            potential_map[cell.first][cell.second] >= LOOP_PENALTY_THRESHOLD) {
+                            cost += LOOP_PENALTY_WEIGHT;
+                        }
+                    }
                 }
-                if (!segment.path_k.empty()) { // 安全策
-                    candidate_paths_info.push_back({cost, X_k, segment.path_k});
+                // ★追加: 禁止マスを通るフォールバックには超高コスト
+                if (is_forbidden) {
+                    cost += 1e18; 
                 }
+                candidate_paths_info.push_back({cost, X_k, path_k_fallback});
             }
                 
             for (const auto& [cost, steps, path] : candidate_paths_info) {
-                if (path.empty()) continue; 
+                
                 vector<vector<Pos>> new_paths_list = state.paths_list;
                 new_paths_list[k] = path;
+                
                 set<Pos> new_path_cells = state.path_cells;
                 new_path_cells.insert(path.begin(), path.end());
+                
                 int new_total_steps = state.total_steps + steps;
-                int new_total_C = new_path_cells.size() + 1; 
+                int new_total_C = new_path_cells.size() + 1;
+                
                 next_beam.push_back({new_paths_list, new_path_cells, new_total_steps, new_total_C});
             }
         }
-        if (next_beam.empty()) { 
-        } else {
-            sort(next_beam.begin(), next_beam.end());
-            if (next_beam.size() > (size_t)BEAM_WIDTH) {
-                next_beam.resize(BEAM_WIDTH);
-            }
-            current_beam = next_beam;
+
+        // 4.5. 枝刈り (変更なし)
+        sort(next_beam.begin(), next_beam.end());
+        if (next_beam.size() > static_cast<size_t>(BEAM_WIDTH)) {
+            next_beam.resize(BEAM_WIDTH);
         }
+        current_beam = next_beam;
+        
         X_future -= X_k;
     }
 
-    // --- 4.4. フェーズ1完了 ---
-    if (current_beam.empty()) {
-        // ビームサーチで解が見つからなかった場合のフォールバック
-        // (ここでは簡略化のため、最も単純な初期解を構築する)
-        cerr << "Warning: Beam search failed. Using fallback." << endl;
-        set<Pos> fallback_cells = {TARGETS[0]};
-        int fallback_steps = 0;
-        for(int k=0; k < K-1; ++k) {
-            if(!all_shortest_paths_fallback[k].empty()) {
-                fallback_cells.insert(all_shortest_paths_fallback[k].begin(), all_shortest_paths_fallback[k].end());
-                fallback_steps += (all_shortest_paths_fallback[k].size() - 1);
-            }
-        }
-        int fallback_C = fallback_cells.size() + 1;
-        current_beam.push_back({all_shortest_paths_fallback, fallback_cells, fallback_steps, fallback_C});
-    }
-
-    BeamState global_best_solution = current_beam[0];
-    cerr << "Phase 1 (Beam Search) Best C: " << global_best_solution.total_C << endl;
-    
-    // --- 4.5. フェーズ2: ILS + ターゲットSA ---
-    
-    mt19937 rng(0); 
-    uniform_real_distribution<double> real_dist(0.0, 1.0);
-    uniform_int_distribution<int> k_dist(0, K - 2);
-
-    auto get_time_ratio = [&]() {
-        auto current_time = high_resolution_clock::now();
-        return duration_cast<duration<double>>(current_time - start_time).count() / TIME_LIMIT_SEC;
-    };
-    auto check_time = [&]() { return get_time_ratio() < 1.0; };
-    auto get_temperature = [&](double time_ratio) {
-        return START_TEMP * pow(END_TEMP / START_TEMP, time_ratio);
-    };
-
-    while (check_time()) { // ILS アウターループ
-        BeamState current_solution = global_best_solution;
-
-        // [摂動 (Perturb / "キック")]
-        set<int> kicked_k;
-        for (int i = 0; i < N_KICK && k_dist(rng) < K - 1; ++i) {
-             int k_to_kick = k_dist(rng);
-             if(shortest_lengths[k_to_kick] < 1e9 && !all_shortest_paths_fallback[k_to_kick].empty()) {
-                current_solution.paths_list[k_to_kick] = all_shortest_paths_fallback[k_to_kick];
-                kicked_k.insert(k_to_kick);
-             }
-        }
-        if (kicked_k.empty()) { 
-            int k_to_kick = k_dist(rng);
-            if(shortest_lengths[k_to_kick] < 1e9 && !all_shortest_paths_fallback[k_to_kick].empty()) {
-                 current_solution.paths_list[k_to_kick] = all_shortest_paths_fallback[k_to_kick];
-            }
-        }
-        recalculate_state(current_solution); // キック後は全体再計算が必要
-
-        // [局所探索 (ターゲットSA)]
-        int inner_loops = (K - 1) * 2; 
-        for (int i = 0; i < inner_loops && check_time(); ++i) {
-            
-            Pos target_cell = {-1, -1};
-            int k = -1; 
-            
-            // --- 1. ヒューリスティック: 非効率なセルを探す ---
-            map<Pos, int> cell_usage_count;
-            vector<Pos> non_target_cells;
-            for(const auto& pos : current_solution.path_cells) {
-                if (TARGET_SET.find(pos) == TARGET_SET.end()) { 
-                    non_target_cells.push_back(pos);
-                }
-            }
-            if (non_target_cells.empty()) { 
-                k = k_dist(rng); 
-            } else {
-                for(int k_idx=0; k_idx < K-1; ++k_idx) {
-                    if(current_solution.paths_list[k_idx].empty()) continue;
-                    set<Pos> path_unique_cells(current_solution.paths_list[k_idx].begin(), current_solution.paths_list[k_idx].end());
-                    for(const auto& pos : path_unique_cells) {
-                        if (TARGET_SET.find(pos) == TARGET_SET.end()) {
-                            cell_usage_count[pos]++;
-                        }
-                    }
-                }
-                int min_dist_from_center = 1e9;
-                for(const auto& pos : non_target_cells) {
-                    int usage = cell_usage_count[pos];
-                    if (usage == 1) { 
-                        int dist_from_center = abs(pos.first - N / 2) + abs(pos.second - N / 2);
-                        if (dist_from_center < min_dist_from_center) {
-                            target_cell = pos;
-                            min_dist_from_center = dist_from_center;
-                        }
-                    }
-                }
-                if (target_cell.first == -1) { 
-                    k = k_dist(rng); 
-                } else {
-                    // --- 2. 'target_cell' を通る 'k' を見つける ---
-                    for(int k_idx=0; k_idx < K-1; ++k_idx) {
-                        for(const auto& pos : current_solution.paths_list[k_idx]) {
-                            if (pos == target_cell) {
-                                k = k_idx; break;
-                            }
-                        }
-                        if (k != -1) break;
-                    }
-                    if (k == -1) { k = k_dist(rng); target_cell = {-1, -1}; } 
-                }
-            }
-            
-            // --- 3. 経路 k を再ルーティング ---
-            if (k < 0 || k >= K-1) k = k_dist(rng); // 安全策
-            if (shortest_lengths[k] >= 1e9) continue;
-            Pos start_node = TARGETS[k], goal_node = TARGETS[k + 1];
-
-            set<Pos> temp_path_cells = {TARGETS[0]};
-            int temp_total_steps = 0;
-            for (int j = 0; j < K - 1; ++j) {
-                if (j == k || current_solution.paths_list[j].empty()) continue;
-                temp_path_cells.insert(current_solution.paths_list[j].begin(), current_solution.paths_list[j].end());
-                temp_total_steps += (current_solution.paths_list[j].size() - 1);
-            }
-
-            int step_limit = T - temp_total_steps;
-            // ### TLE修正 2 ###: 状態爆発を防ぐため、ステップ数に上限を設ける
-            step_limit = min(step_limit, shortest_lengths[k] + DIJKSTRA_STEP_CAP);
-            if (step_limit < shortest_lengths[k]) continue;
-
-            vector<Pos> new_path_k = find_path_dijkstra_single(start_node, goal_node, step_limit, temp_path_cells, target_cell);
-            if (new_path_k.empty()) continue;
-            
-            // --- 4. 評価と採択 (SA) ---
-            // ### TLE修正 3 ###: 差分更新 (recalculate_state の呼び出しを削除)
-            set<Pos> new_path_cells = temp_path_cells; 
-            new_path_cells.insert(new_path_k.begin(), new_path_k.end());
-            int new_C = new_path_cells.size() + 1;
-            int new_total_steps = temp_total_steps + (new_path_k.size() - 1);
-            
-            double delta_C = (double)new_C - (double)current_solution.total_C;
-            
-            if (delta_C < 0) { // 改善
-                current_solution.paths_list[k] = new_path_k;
-                current_solution.path_cells = new_path_cells;
-                current_solution.total_C = new_C;
-                current_solution.total_steps = new_total_steps;
-                
-                if (current_solution.total_C < global_best_solution.total_C) {
-                    global_best_solution = current_solution;
-                }
-            } else { // 悪化
-                double time_ratio = get_time_ratio();
-                double temperature = get_temperature(time_ratio);
-                if (real_dist(rng) < exp(-delta_C / temperature)) {
-                    current_solution.paths_list[k] = new_path_k;
-                    current_solution.path_cells = new_path_cells;
-                    current_solution.total_C = new_C;
-                    current_solution.total_steps = new_total_steps;
-                }
-            }
-        } // end inner loop (SA)
-    } // end while (ILS アウターループ)
-
-
-    // --- 5. 最終解の選択 ---
-    int C_val = global_best_solution.total_C;
+    // --- 5. 最終解の選択 (変更なし) ---
+    BeamState best_solution = current_beam[0];
+    int C_val = best_solution.total_C;
     int Q_val = K;
-    cerr << "Phase 2 (Final ILS+SA) Best C: " << C_val << endl;
 
-    // --- 6. 色の割り当てと遷移規則の生成 ---
+    // --- 6. 色の割り当てと遷移規則の生成 (変更なし) ---
     map<Pos, int> color_map;
     int current_color = 1; 
-    for (const auto& cell : global_best_solution.path_cells) {
+    for (const auto& cell : best_solution.path_cells) {
         if (color_map.find(cell) == color_map.end()) {
             color_map[cell] = current_color++;
         }
     }
+
     vector<vector<int>> initial_board(N, vector<int>(N, 0));
     for (auto const& [pos, color] : color_map) {
         initial_board[pos.first][pos.second] = color;
     }
+
     set<tuple<int, int, int, int, char>> rules;
     for (int k = 0; k < K - 1; ++k) {
-        vector<Pos>& path = global_best_solution.paths_list[k];
+        vector<Pos>& path = best_solution.paths_list[k];
         if (path.empty()) continue;
         int current_q = k;
         for (size_t p = 0; p < path.size() - 1; ++p) {
-            Pos pos = path[p]; Pos next_pos = path[p+1];
+            Pos pos = path[p];
+            Pos next_pos = path[p+1];
+            
             int c = color_map.count(pos) ? color_map[pos] : 0;
             char d = get_direction(pos, next_pos);
+            int A = c; 
             int S = (next_pos == TARGETS[k + 1]) ? k + 1 : k;
-            rules.insert({c, current_q, c, S, d});
+            
+            rules.insert({c, current_q, A, S, d});
         }
     }
     int M_val = rules.size();
 
-    // --- 7. 出力 ---
+
+    // --- 7. 出力 (変更なし) ---
     cout << C_val << " " << Q_val << " " << M_val << "\n";
     for (int i = 0; i < N; ++i) {
         for (int j = 0; j < N; ++j) {
@@ -624,6 +650,11 @@ int main() {
              << get<2>(rule) << " " << get<3>(rule) << " " 
              << get<4>(rule) << "\n";
     }
+
+    auto end_time = chrono::high_resolution_clock::now();
+    auto duration = chrono::duration_cast<chrono::milliseconds>(end_time - start_time);
+    cerr << "実行時間: " << duration.count() << " ms" << endl;
+    cerr << "スコア: " << (C_val + Q_val) << endl;
 
     return 0;
 }
