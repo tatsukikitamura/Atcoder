@@ -7,8 +7,8 @@ inディレクトリ内のすべてのテストケースで実行し、どちら
 # ============================================
 # 設定: 比較するプログラムのファイル名を指定
 # ============================================
-PROGRAM1_NAME = "1_1.cpp"  # 比較する1つ目のプログラム
-PROGRAM2_NAME = "1_5.cpp"  # 比較する2つ目のプログラム
+PROGRAM1_NAME = "1_5.cpp"  # 比較する1つ目のプログラム
+PROGRAM2_NAME = "1_2.cpp"  # 比較する2つ目のプログラム
 # ============================================
 
 import subprocess
@@ -21,7 +21,7 @@ from typing import Optional, Tuple
 
 # ディレクトリ設定
 BASE_DIR = Path(__file__).parent
-IN_DIR = BASE_DIR / "in"
+IN_DIR = BASE_DIR / "in4"
 PROGRAM1 = BASE_DIR / PROGRAM1_NAME
 PROGRAM2 = BASE_DIR / PROGRAM2_NAME
 EXEC1 = BASE_DIR / PROGRAM1_NAME.replace(".cpp", "")

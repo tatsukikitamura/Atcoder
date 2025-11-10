@@ -17,13 +17,13 @@ vector<string> V_WALLS;
 vector<string> H_WALLS;
 vector<pair<int, int>> TARGETS;
 
-int BEAM_WIDTH = 5;
-int N_PATHS_PER_STATE = 3;
+int BEAM_WIDTH = 20;
+int N_PATHS_PER_STATE = 10;
 
 using Pos = pair<int, int>; 
 using Edge = pair<Pos, Pos>; 
 
-// --- 2. ヘルパー関数 (省略なし) ---
+// --- 2. ヘルパー関数 (変更なし) ---
 bool can_move(int i, int j, char d) {
     if (d == 'U') {
         if (i == 0) return false;
@@ -61,8 +61,7 @@ char get_direction(Pos pos1, Pos pos2) {
 }
 
 
-// --- 3. BFS (省略なし) ---
-// (元のコードのまま)
+// --- 3. BFS (変更なし) ---
 pair<int, vector<Pos>> bfs_path_and_length(Pos start_pos, Pos goal_pos) {
     deque<pair<Pos, vector<Pos>>> q;
     q.push_back({start_pos, {start_pos}});
@@ -126,12 +125,10 @@ int bfs_second_path_length(Pos start_pos, Pos goal_pos, set<Edge>& forbidden_edg
 }
 
 
-// --- 3.6. パレート最適ダイクストラ (★変更あり) ---
+// --- 3.6. パレート最適ダイクストラ (★ forbidden_cells 追加) ---
 
-// コストに long long を使う
 using DijkstraResult = tuple<long long, int, vector<Pos>>;
 
-// 経路復元ヘルパー (★変更あり: long long cost)
 vector<Pos> reconstruct_path(map<Pos, map<int, pair<Pos, int>>>& prev, Pos start_pos, Pos goal_pos, int steps) {
     vector<Pos> path;
     Pos curr_pos = goal_pos;
@@ -149,33 +146,33 @@ vector<Pos> reconstruct_path(map<Pos, map<int, pair<Pos, int>>>& prev, Pos start
     return path;
 }
 
-// ★変更: コストスケーリングと潜在価値マップの導入
+// ★ 復活: スケールとヒューリスティック
 const long long BASE_COST_SCALE = 1000;
 const long long HEURISTIC_WEIGHT = 1;
+const long long LOOP_PENALTY_WEIGHT = 1500; // ★ 2列通路ペナルティ（大幅増加）
+const int LOOP_PENALTY_THRESHOLD = 5; // ★ ターゲットからの距離閾値（より多くのマスに適用）
 
-// ★変更: potential_map を引数に追加
 vector<DijkstraResult> find_path_dijkstra_beam(
     Pos start_pos, Pos goal_pos, int step_limit, 
     const set<Pos>& total_path_cells,
-    const vector<vector<int>>& potential_map // ★追加
+    const vector<vector<int>>& potential_map, // ★ 復活: int型
+    const vector<vector<bool>>& forbidden_cells, // ★ 新規追加
+    const vector<vector<int>>& freedom // ★ 2列通路ペナルティ用
 ) {
     
-    // ★変更: cost を long long に
     using State = tuple<long long, int, Pos>;
     priority_queue<State, vector<State>, greater<State>> pq;
     pq.push({0, 0, start_pos});
 
-    // ★変更: cost を long long に
     map<Pos, map<int, long long>> dist;
     dist[start_pos][0] = 0;
 
     map<Pos, map<int, pair<Pos, int>>> prev;
 
-    // ★変更: cost を long long に
     vector<pair<long long, int>> found_goals;
 
     while (!pq.empty()) {
-        long long cost; // ★変更
+        long long cost; 
         int steps;
         Pos pos;
         tie(cost, steps, pos) = pq.top();
@@ -197,22 +194,31 @@ vector<DijkstraResult> find_path_dijkstra_beam(
         for (char d : {'U', 'D', 'L', 'R'}) {
             if (can_move(pos.first, pos.second, d)) {
                 Pos next_pos = get_next_pos(pos.first, pos.second, d);
+
+                // --- ★★★ 禁止マス チェック ★★★ ---
+                if (forbidden_cells[next_pos.first][next_pos.second]) {
+                    continue;
+                }
+                // --- ★★★ チェックここまで ★★★
+
                 int next_steps = steps + 1;
-                
-                long long new_cost = cost; // ★変更
+                long long new_cost = cost; 
                 
                 if (total_path_cells.find(next_pos) == total_path_cells.end()) {
-                    // --- ★★★コスト計算の変更★★★ ---
-                    // 以前: new_cost += 1;
-                    
-                    // 変更後:
-                    // 基本コスト (1) をスケール
+                    // ★ 復活: 「最近傍」ヒューリスティック
                     new_cost += BASE_COST_SCALE; 
-                    // ヒューリスティックコスト (ターゲットに近いほど小さい) を加算
                     new_cost += HEURISTIC_WEIGHT * potential_map[next_pos.first][next_pos.second];
-                    // --- ★★★変更ここまで★★★ ---
+                    
+                    // ★★★ 2列通路ペナルティ (ソフトペナルティ) ★★★
+                    // 「ターゲットから遠い、自由度2のマス」は、
+                    // 価値の低い2列通路の可能性が高いので、追加ペナルティ
+                    if (freedom[next_pos.first][next_pos.second] == 2 && 
+                        potential_map[next_pos.first][next_pos.second] >= LOOP_PENALTY_THRESHOLD) {
+                        new_cost += LOOP_PENALTY_WEIGHT;
+                    }
                 }
 
+                // (ドミネーションチェックは変更なし)
                 bool is_dominated = false;
                 if (dist.count(next_pos)) {
                     for (auto const& [existing_steps, existing_cost] : dist[next_pos]) {
@@ -251,7 +257,7 @@ vector<DijkstraResult> find_path_dijkstra_beam(
     }
 
     sort(found_goals.begin(), found_goals.end());
-    if (found_goals.size() > N_PATHS_PER_STATE) {
+    if (found_goals.size() > static_cast<size_t>(N_PATHS_PER_STATE)) {
         found_goals.resize(N_PATHS_PER_STATE);
     }
 
@@ -266,14 +272,12 @@ vector<DijkstraResult> find_path_dijkstra_beam(
 
 // --- 4. メインロジック (ビームサーチ) ---
 
-// (BeamState, Segment は省略なし)
 struct BeamState {
     vector<vector<Pos>> paths_list;
     set<Pos> path_cells;
     int total_steps;
     int total_C;
 
-    // ソート用 (C優先、次にSteps)
     bool operator<(const BeamState& other) const {
         if (total_C != other.total_C) {
             return total_C < other.total_C;
@@ -308,7 +312,64 @@ int main() {
     for (int i = 0; i < N - 1; ++i) cin >> H_WALLS[i];
     for (int i = 0; i < K; ++i) cin >> TARGETS[i].first >> TARGETS[i].second;
 
-    // --- ★★★ 4.0. 潜在価値マップの計算 (マルチソースBFS) ★★★ ---
+    // --- ★ パラメータ調整: Kの値に応じて計算量を削減 ★ ---
+    // Kの「個数」ではなく、盤面サイズに対する「密度」で判定する
+    // 旧しきい値（K >= 350, 300, 275, 250, 225, 200）は N=20 基準で
+    // それぞれ密度 0.875, 0.75, 0.6875, 0.625, 0.5625, 0.5 に相当
+    double density = static_cast<double>(K) / (static_cast<double>(N) * static_cast<double>(N));
+    
+    // --- ★ パラメータ調整: Nが大きい場合にさらに計算量を削減 ★ ---
+    if (N >= 19) {
+        // Nが大きい場合は、さらにパラメータを削減
+        // 旧Kしきい値 (200, 150, 100) は N=20 を基準に密度 (0.5, 0.375, 0.25)
+        if (density >= 0.75) {
+            BEAM_WIDTH =  5;
+            N_PATHS_PER_STATE = 3;
+        } 
+        else if (density >= 0.625) {
+            BEAM_WIDTH =  6;
+            N_PATHS_PER_STATE = 3;
+        } 
+        else if (density >= 0.5) {
+            BEAM_WIDTH =  7;
+            N_PATHS_PER_STATE = 4;
+        } 
+        else {
+            BEAM_WIDTH = 8;
+            N_PATHS_PER_STATE = 4;
+        }
+    } else if (N >= 17) {
+        if (density >= 0.875) {
+            BEAM_WIDTH = 6;
+            N_PATHS_PER_STATE = 3;
+        } else if (density >= 0.75) {
+            BEAM_WIDTH = 8;
+            N_PATHS_PER_STATE = 4;
+        } else if {
+            BEAM_WIDTH = 9;
+            N_PATHS_PER_STATE = 5;
+        } else {
+            // density < 0.5 の場合も適切なパラメータを設定（デフォルト値は大きすぎる）
+            BEAM_WIDTH = 10;
+            N_PATHS_PER_STATE = 5;
+        }
+    } else {
+        if (density >= 0.875) {
+            BEAM_WIDTH = 8;
+            N_PATHS_PER_STATE = 4;
+        } else if (density >= 0.75) {
+            BEAM_WIDTH = 9;
+            N_PATHS_PER_STATE = 5;
+        } else if (density >= 0.5) {
+            BEAM_WIDTH = 11;
+            N_PATHS_PER_STATE = 6;
+        } else {
+            BEAM_WIDTH = 14:
+            N_PATHS_PER_STATE = 7;
+        }
+    }
+
+    // --- ★ 4.0. 潜在価値マップの計算 (★「最近傍」ロジックに戻す) ---
     vector<vector<int>> potential_map(N, vector<int>(N, 1e9));
     queue<Pos> q_potential;
     for (int k = 0; k < K; ++k) {
@@ -334,10 +395,90 @@ int main() {
             }
         }
     }
-    // --- ★★★ ここまで ★★★
+    // --- ★ 4.0. ここまで ★ ---
 
 
-    // 4.1. 全区間の自由度を計算 (省略なし)
+    // --- ★★★ 4.1. 禁止マス(袋小路の奥)の計算 (新規追加) ★★★ ---
+    vector<vector<int>> freedom(N, vector<int>(N, 0));
+    vector<vector<bool>> is_target(N, vector<bool>(N, false));
+    for(int k=0; k<K; ++k) is_target[TARGETS[k].first][TARGETS[k].second] = true;
+
+    vector<Pos> leafs;
+    for (int i = 0; i < N; ++i) {
+        for (int j = 0; j < N; ++j) {
+            for (char d : {'U', 'D', 'L', 'R'}) {
+                if (can_move(i, j, d)) freedom[i][j]++;
+            }
+            // 自由度1 (袋小路の先端) かつ ターゲットではないマス を「葉」とする
+            if (freedom[i][j] == 1 && !is_target[i][j]) {
+                leafs.push_back({i, j});
+            }
+        }
+    }
+
+    vector<vector<bool>> forbidden_cells(N, vector<bool>(N, false));
+    vector<vector<bool>> visited_trace(N, vector<bool>(N, false));
+
+    for (const auto& leaf : leafs) {
+        if (visited_trace[leaf.first][leaf.second]) continue;
+
+        vector<Pos> path;
+        Pos curr = leaf;
+        Pos prev = {-1, -1};
+        bool path_is_useless = true; // 仮に「不要」と設定
+
+        while (true) {
+            visited_trace[curr.first][curr.second] = true;
+            path.push_back(curr);
+            
+            Pos next_neighbor = {-1, -1};
+            for (char d : {'U', 'D', 'L', 'R'}) {
+                if (can_move(curr.first, curr.second, d)) {
+                    Pos next = get_next_pos(curr.first, curr.second, d);
+                    if (next != prev) {
+                        next_neighbor = next;
+                        break; // 自由度2以下なら隣人は1人(来た道以外)のはず
+                    }
+                }
+            }
+
+            if (next_neighbor == Pos{-1, -1}) {
+                // どこにも行けない (freedom=1 だが壁に囲まれている？)
+                break;
+            }
+
+            if (is_target[next_neighbor.first][next_neighbor.second]) {
+                // ターゲットに突き当たった -> このパスは「不要」で確定
+                path_is_useless = true; 
+                break;
+            }
+            if (freedom[next_neighbor.first][next_neighbor.second] > 2) {
+                // 合流地点(交差点)に着いた -> このパスは「必要」(メイン経路)
+                path_is_useless = false; 
+                break;
+            }
+            if (visited_trace[next_neighbor.first][next_neighbor.second]) {
+                // 既に探索済みのパスに合流した -> 「必要」と見なす
+                path_is_useless = false; 
+                break;
+            }
+            
+            // 自由度2の通路が続く
+            prev = curr;
+            curr = next_neighbor;
+        }
+
+        if (path_is_useless) {
+            // このパスは「袋小路の奥」と認定
+            for (const auto& p : path) {
+                forbidden_cells[p.first][p.second] = true;
+            }
+        }
+    }
+    // --- ★★★ 4.1. ここまで ★★★
+
+
+    // 4.2. 全区間の自由度を計算 (変更なし)
     vector<Segment> segments_info;
     double total_shortest_steps_X = 0;
     vector<int> shortest_lengths(K - 1);
@@ -364,10 +505,10 @@ int main() {
         segments_info.push_back({k, X_k, path_k, freedom_score});
     }
 
-    // 4.2. 自由度が「低い」順にソート (変更なし)
+    // 4.3. 自由度が「低い」順にソート (変更なし)
     sort(segments_info.begin(), segments_info.end());
 
-    // 4.3. ビームサーチの実行 (変更なし)
+    // 4.4. ビームサーチの実行
     vector<BeamState> current_beam;
     set<Pos> initial_cells = {TARGETS[0]};
     int initial_C = initial_cells.size() + 1; 
@@ -396,28 +537,42 @@ int main() {
                 step_limit = X_k;
             }
                 
-            // ★変更: potential_map を渡す
+            // ★変更: forbidden_cells と freedom を渡す
             vector<DijkstraResult> candidate_paths_info = find_path_dijkstra_beam(
                 start_node, 
                 goal_node, 
                 step_limit, 
                 state.path_cells,
-                potential_map // ★追加
+                potential_map,
+                forbidden_cells, // ★追加
+                freedom // ★ 2列通路ペナルティ用
             );
             
-            // ★変更: フォールバックも long long とスケールを合わせる
             if (candidate_paths_info.empty()) {
-                long long cost = 0; // ★変更
+                long long cost = 0; 
+                bool is_forbidden = false;
                 for (const auto& cell : path_k_fallback) {
-                    if (state.path_cells.find(cell) == state.path_cells.end()) {
-                        cost += BASE_COST_SCALE; // ★変更
-                        cost += HEURISTIC_WEIGHT * potential_map[cell.first][cell.second]; // ★変更
+                    // ★追加: フォールバックが禁止マスを通るかチェック
+                    if (forbidden_cells[cell.first][cell.second]) {
+                        is_forbidden = true;
                     }
+                    if (state.path_cells.find(cell) == state.path_cells.end()) {
+                        cost += BASE_COST_SCALE; 
+                        cost += HEURISTIC_WEIGHT * potential_map[cell.first][cell.second];
+                        // ★★★ 2列通路ペナルティ (フォールバック用) ★★★
+                        if (freedom[cell.first][cell.second] == 2 && 
+                            potential_map[cell.first][cell.second] >= LOOP_PENALTY_THRESHOLD) {
+                            cost += LOOP_PENALTY_WEIGHT;
+                        }
+                    }
+                }
+                // ★追加: 禁止マスを通るフォールバックには超高コスト
+                if (is_forbidden) {
+                    cost += 1e18; 
                 }
                 candidate_paths_info.push_back({cost, X_k, path_k_fallback});
             }
                 
-            // 展開 (変更なし)
             for (const auto& [cost, steps, path] : candidate_paths_info) {
                 
                 vector<vector<Pos>> new_paths_list = state.paths_list;
@@ -433,9 +588,9 @@ int main() {
             }
         }
 
-        // 4.4. 枝刈り (変更なし)
+        // 4.5. 枝刈り (変更なし)
         sort(next_beam.begin(), next_beam.end());
-        if (next_beam.size() > BEAM_WIDTH) {
+        if (next_beam.size() > static_cast<size_t>(BEAM_WIDTH)) {
             next_beam.resize(BEAM_WIDTH);
         }
         current_beam = next_beam;
@@ -450,7 +605,7 @@ int main() {
 
     // --- 6. 色の割り当てと遷移規則の生成 (変更なし) ---
     map<Pos, int> color_map;
-    int current_color = 1; // 0はダミー
+    int current_color = 1; 
     for (const auto& cell : best_solution.path_cells) {
         if (color_map.find(cell) == color_map.end()) {
             color_map[cell] = current_color++;
