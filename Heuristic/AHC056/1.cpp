@@ -7,6 +7,7 @@
 #include <map>
 #include <tuple>
 #include <algorithm>
+#include <chrono>
 
 using namespace std;
 
@@ -17,8 +18,9 @@ vector<string> H_WALLS;
 vector<pair<int, int>> TARGETS;
 
 // ビームサーチ設定 (Pythonコードから)
-int BEAM_WIDTH = 10;
-int N_PATHS_PER_STATE = 7;
+int BEAM_WIDTH = 5;  // デフォルト値
+int N_PATHS_PER_STATE = 20;  // デフォルト値
+
 
 // 型定義
 using Pos = pair<int, int>; 
@@ -282,10 +284,25 @@ struct Segment {
 
 
 int main() {
+    auto start_time = chrono::high_resolution_clock::now();
+    
     ios::sync_with_stdio(false);
     cin.tie(NULL);
 
     cin >> N >> K >> T;
+    
+    // --- Nのサイズに応じてパラメータを調整 ---
+    if (N <= 15){
+        // Nが小さい: 時間が余るので、BWを増やしてスコアを狙う
+        BEAM_WIDTH = 10;
+        N_PATHS_PER_STATE = 20;
+    } else if (N <= 20) {
+        // Nが中くらい: デフォルト値
+        BEAM_WIDTH = 5;
+        N_PATHS_PER_STATE = 20;
+    }
+    // --- 調整ここまで ---
+    
     V_WALLS.resize(N);
     H_WALLS.resize(N - 1);
     TARGETS.resize(K);
@@ -454,6 +471,11 @@ int main() {
              << get<2>(rule) << " " << get<3>(rule) << " " 
              << get<4>(rule) << "\n";
     }
+
+    auto end_time = chrono::high_resolution_clock::now();
+    auto duration = chrono::duration_cast<chrono::milliseconds>(end_time - start_time);
+    cerr << "実行時間: " << duration.count() << " ms" << endl;
+    cerr << "スコア: " << (C_val + Q_val) << endl;
 
     return 0;
 }
