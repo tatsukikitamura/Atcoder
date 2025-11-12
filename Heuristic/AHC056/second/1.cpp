@@ -7,7 +7,9 @@
 #include <map>
 #include <tuple>
 #include <algorithm>
-#include <chrono> // ★ ローカルサーチの時間制限用にインクルード
+#include <chrono> 
+#include <cmath>     // exp() のために追加
+#include <random>    // 乱数生成のために追加
 
 using namespace std;
 
@@ -291,7 +293,7 @@ struct Segment {
 
 
 int main() {
-    auto start_time = chrono::high_resolution_clock::now(); // ★ 時間計測開始
+    auto start_time = chrono::high_resolution_clock::now(); // 時間計測開始
     
     ios::sync_with_stdio(false);
     cin.tie(NULL);
@@ -304,7 +306,7 @@ int main() {
     for (int i = 0; i < N - 1; ++i) cin >> H_WALLS[i];
     for (int i = 0; i < K; ++i) cin >> TARGETS[i].first >> TARGETS[i].second;
 
-    // --- ★ パラメータ調整 (ユーザー定義) ---
+    // --- パラメータ調整 (変更なし) ---
     double density = static_cast<double>(K) / (static_cast<double>(N) * static_cast<double>(N));
     
     if (N >= 19) {
@@ -367,10 +369,10 @@ int main() {
             N_PATHS_PER_STATE = 8;
         }
     }
-    // --- ★ パラメータ調整ここまで ---
+    // --- パラメータ調整ここまで ---
 
 
-    // --- ★ 4.0. 潜在価値マップの計算 (変更なし) ---
+    // --- 4.0. 潜在価値マップの計算 (変更なし) ---
     vector<vector<int>> potential_map(N, vector<int>(N, 1e9));
     queue<Pos> q_potential;
     for (int k = 0; k < K; ++k) {
@@ -397,7 +399,7 @@ int main() {
         }
     }
 
-    // --- ★★★ 4.1. 禁止マス(袋小路の奥)の計算 (変更なし) ★★★ ---
+    // --- 4.1. 禁止マス(袋小路の奥)の計算 (変更なし) ---
     vector<vector<int>> freedom(N, vector<int>(N, 0));
     vector<vector<bool>> is_target(N, vector<bool>(N, false));
     for(int k=0; k<K; ++k) is_target[TARGETS[k].first][TARGETS[k].second] = true;
@@ -499,7 +501,7 @@ int main() {
     // 4.3. 自由度が「低い」順にソート (変更なし)
     sort(segments_info.begin(), segments_info.end());
 
-    // 4.4. ビームサーチの実行
+    // 4.4. ビームサーチの実行 (変更なし)
     vector<BeamState> current_beam;
     set<Pos> initial_cells = {TARGETS[0]};
     int initial_C = initial_cells.size() + 1; 
@@ -508,10 +510,9 @@ int main() {
     double X_future = total_shortest_steps_X;
 
     for (const auto& segment : segments_info) {
-        // ★ ローカルサーチに時間を残すため、ビームサーチは早めに打ち切る
         auto current_time_beam = chrono::high_resolution_clock::now();
         auto elapsed_ms_beam = chrono::duration_cast<chrono::milliseconds>(current_time_beam - start_time).count();
-        if (elapsed_ms_beam >= 1900) { // ★ 1.8秒でビームサーチを打ち切り
+        if (elapsed_ms_beam >= 1800) { // 1.8秒でビームサーチを打ち切り
             cerr << "ビームサーチ時間切れ: " << elapsed_ms_beam << " ms" << endl;
             break;
         }
@@ -535,7 +536,7 @@ int main() {
             if (step_limit < X_k) {
                 step_limit = X_k;
             }
-                
+                 
             vector<DijkstraResult> candidate_paths_info = find_path_dijkstra_beam(
                 start_node, 
                 goal_node, 
@@ -567,7 +568,7 @@ int main() {
                 }
                 candidate_paths_info.push_back({cost, X_k, path_k_fallback});
             }
-                
+                 
             for (const auto& [cost, steps, path] : candidate_paths_info) {
                 
                 vector<vector<Pos>> new_paths_list = state.paths_list;
@@ -593,9 +594,9 @@ int main() {
         X_future -= X_k;
     }
 
-    // --- 5. 最終解の選択 と ローカルサーチによる改善 ★★★
+    // --- 5. 最終解の選択 と 焼きなまし法による改善 ★★★
     
-    // (A) まずビームサーチの最良解を取得
+    // (A) まずビームサーチの最良解を取得 (変更なし)
     BeamState best_solution;
     if (current_beam.empty()) {
         cerr << "警告: ビームが空です。最短経路でフォールバックします。" << endl;
@@ -612,7 +613,7 @@ int main() {
         best_solution = current_beam[0];
     }
     
-    // (B) 不完全なら補完
+    // (B) 不完全なら補完 (変更なし)
     bool is_incomplete = false;
     for (int k = 0; k < K - 1; ++k) {
         if (best_solution.paths_list[k].empty()) {
@@ -637,119 +638,214 @@ int main() {
         best_solution = {fallback_paths, fallback_cells, fallback_total_steps, (int)fallback_cells.size() + 1};
     }
 
-    // (C) ★★★ ローカルサーチ（山登り法）による改善 ★★★
-    const long long TIME_LIMIT_MS = 1950; // 全体の制限時間
-    bool improved = true;
+    // (C) ★★★ 焼きなまし法 (Simulated Annealing) ★★★
+    // ★★★ ここからが変更箇所 ★★★
     
-    // 改善不可能なセルを記録（簡易的なタブーリスト）
+    const long long TIME_LIMIT_MS = 1900; // 全体の制限時間
+    const double START_TEMP = 1.5; 
+    const double END_TEMP = 0.01;  
+
+    // 乱数生成器
+    random_device rd;
+    mt19937 rnd_gen(rd());
+    uniform_real_distribution<> sa_prob_dist(0.0, 1.0); // ★ 0.0-1.0の確率分布
+    uniform_int_distribution<> k_dist(0, K - 2);        // ★ 0-(K-2)のランダムなkを選ぶ分布
+
     set<pair<int, Pos>> tried_improve; 
 
-    while (improved) {
+    while (true) {
         auto current_time = chrono::high_resolution_clock::now();
         auto elapsed_ms = chrono::duration_cast<chrono::milliseconds>(current_time - start_time).count();
         if (elapsed_ms >= TIME_LIMIT_MS) {
-            cerr << "ローカルサーチ時間切れ: " << elapsed_ms << " ms" << endl;
+            cerr << "焼きなまし時間切れ: " << elapsed_ms << " ms" << endl;
             break;
         }
+
+        double time_ratio = min(1.0, (double)elapsed_ms / TIME_LIMIT_MS);
+        double current_temp = START_TEMP + (END_TEMP - START_TEMP) * time_ratio;
         
-        improved = false; // ★ 今イテレーションでは、まだ改善フラグを立てない
-        
-        // 1. 全マスの使用回数を集計
+        // 1. 全マスの使用回数を集計 (変更なし)
         map<Pos, int> usage_count;
         for (int k = 0; k < K - 1; ++k) {
              if (best_solution.paths_list[k].empty()) continue;
-             // ★ 経路上のユニークなマスのみカウント
             set<Pos> path_unique_cells(best_solution.paths_list[k].begin(), best_solution.paths_list[k].end()); 
             for (const auto& cell : path_unique_cells) {
                 usage_count[cell]++;
             }
         }
         
-        // 2. 「1回だけ」使われているマスを探す
-        Pos target_cell = {-1, -1};
-        int target_k = -1;
+        // ★★★ 近傍探索の分岐 (80% C改善 / 20% T改善) ★★★
         
-        // 自由度の高い(迂回しやすい)セグメントから探すため、kを逆順(自由度ソート順)で探す
-        for (int k_idx = segments_info.size() - 1; k_idx >= 0; --k_idx) {
-            int k = segments_info[k_idx].k; // 自由度の高い順
-            if (best_solution.paths_list[k].empty()) continue;
+        if (sa_prob_dist(rnd_gen) < 0.8) 
+        {
+            // --- 近傍A: C改善 (確率80%) ---
+            // (既存のロジック: usage_count == 1 の target_cell を探す)
             
-            for (const auto& cell : best_solution.paths_list[k]) {
-                // ターゲットではなく、1回しか使われず、まだ試行していないマス
-                if (usage_count[cell] == 1 && 
-                    cell != TARGETS[k] && cell != TARGETS[k+1] &&
-                    tried_improve.find({k, cell}) == tried_improve.end()) { 
-                    
-                    target_cell = cell;
-                    target_k = k;
-                    break;
+            Pos target_cell = {-1, -1};
+            int target_k = -1;
+            
+            for (int k_idx = segments_info.size() - 1; k_idx >= 0; --k_idx) {
+                int k = segments_info[k_idx].k; 
+                if (best_solution.paths_list[k].empty()) continue;
+                
+                for (const auto& cell : best_solution.paths_list[k]) {
+                    if (usage_count[cell] == 1 && 
+                        cell != TARGETS[k] && cell != TARGETS[k+1] &&
+                        tried_improve.find({k, cell}) == tried_improve.end()) { 
+                        
+                        target_cell = cell;
+                        target_k = k;
+                        break;
+                    }
+                }
+                if (target_k != -1) break;
+            }
+
+            if (target_k == -1) {
+                tried_improve.clear();
+                continue; 
+            }
+            
+            tried_improve.insert({target_k, target_cell});
+
+            // 代替ルートの探索 (既存のロジック)
+            Pos start_node = TARGETS[target_k];
+            Pos goal_node = TARGETS[target_k + 1];
+            
+            vector<vector<bool>> local_forbidden_cells = forbidden_cells; 
+            local_forbidden_cells[target_cell.first][target_cell.second] = true; 
+
+            set<Pos> other_cells;
+            for (int k = 0; k < K - 1; ++k) {
+                if (k == target_k) continue; 
+                if (best_solution.paths_list[k].empty()) continue;
+                other_cells.insert(best_solution.paths_list[k].begin(), best_solution.paths_list[k].end());
+            }
+            
+            int current_steps_k = best_solution.paths_list[target_k].size() - 1;
+            int other_steps = best_solution.total_steps - current_steps_k;
+            int step_limit = T - other_steps; 
+
+            vector<DijkstraResult> candidates = find_path_dijkstra_beam(
+                start_node, 
+                goal_node, 
+                step_limit, 
+                other_cells, 
+                potential_map,
+                local_forbidden_cells,
+                freedom 
+            );
+
+            if (candidates.empty()) {
+                continue; // 代替ルートが見つからなかった
+            }
+
+            // 解の評価と遷移 (既存のロジック)
+            auto [best_new_cost, best_new_steps, best_new_path] = candidates[0];
+            
+            set<Pos> new_total_cells = other_cells;
+            new_total_cells.insert(best_new_path.begin(), best_new_path.end());
+            int new_C = new_total_cells.size() + 1;
+            int new_total_steps = other_steps + best_new_steps; 
+
+            int delta_score = (new_C - best_solution.total_C);
+
+            if (new_total_steps > T) {
+                delta_score += 1e9; // 事実上の拒否
+            }
+
+            if (delta_score < 0) {
+                // ★★★ 改善成功 (常に受け入れ) ★★★
+                cerr << "SA (C改善): k=" << target_k << " (cell: " << target_cell.first << "," << target_cell.second << ") を更新。 C: " << best_solution.total_C << " -> " << new_C << endl;
+                best_solution.paths_list[target_k] = best_new_path;
+                best_solution.path_cells = new_total_cells;
+                best_solution.total_C = new_C;
+                best_solution.total_steps = new_total_steps;
+                tried_improve.clear(); // 状態が変化したのでタブーリセット
+            } else {
+                // ★★★ 悪化または維持 (確率で受け入れ) ★★★
+                double probability = exp(-(double)delta_score / current_temp);
+                if (sa_prob_dist(rnd_gen) < probability) {
+                    cerr << "SA 悪化遷移(C): k=" << target_k << " (cell: " << target_cell.first << "," << target_cell.second << ") を更新。 C: " << best_solution.total_C << " -> " << new_C << " (Prob: " << probability << ")" << endl;
+                    best_solution.paths_list[target_k] = best_new_path;
+                    best_solution.path_cells = new_total_cells;
+                    best_solution.total_C = new_C;
+                    best_solution.total_steps = new_total_steps;
+                    tried_improve.clear(); // 状態が変化したのでタブーリセット
                 }
             }
-            if (target_k != -1) break;
-        }
+        } 
+        else 
+        {
+            // --- 近傍B: T改善 (確率20%) ---
+            // (新規のロジック: usage_count >= 2 の経路を短縮する)
 
-        if (target_k == -1) {
-            break; // 改善対象（1回マス）がもうない
-        }
-        
-        // この改善（k, cell）を試行したと記録
-        tried_improve.insert({target_k, target_cell});
+            // 1. ランダムな k を選び、usage_count >= 2 のマスを探す
+            int target_k = k_dist(rnd_gen); // 0 から K-2 の間でランダムにkを選ぶ
+            if (best_solution.paths_list[target_k].empty()) continue;
 
-        // 3. 代替ルートの探索
-        Pos start_node = TARGETS[target_k];
-        Pos goal_node = TARGETS[target_k + 1];
-        
-        vector<vector<bool>> local_forbidden_cells = forbidden_cells; 
-        local_forbidden_cells[target_cell.first][target_cell.second] = true; // 「1回マス」を禁止
+            Pos target_cell = {-1, -1};
+            for (const auto& cell : best_solution.paths_list[target_k]) {
+                if (usage_count[cell] >= 2 && 
+                    cell != TARGETS[target_k] && cell != TARGETS[target_k + 1]) { // k+1 は typo のため修正
+                    target_cell = cell;
+                    break; // 最初に見つかったものを使う
+                }
+            }
+            if (target_cell.first == -1) {
+                continue; // 適切な近傍(usage_count >= 2 のマス)が見つからなかった
+            }
 
-        set<Pos> other_cells;
-        for (int k = 0; k < K - 1; ++k) {
-            if (k == target_k) continue; 
-            if (best_solution.paths_list[k].empty()) continue;
-            other_cells.insert(best_solution.paths_list[k].begin(), best_solution.paths_list[k].end());
-        }
-        
-        int current_steps_k = best_solution.paths_list[target_k].size() - 1;
-        int other_steps = best_solution.total_steps - current_steps_k;
-        int step_limit = T - other_steps; 
-
-        vector<DijkstraResult> candidates = find_path_dijkstra_beam(
-            start_node, 
-            goal_node, 
-            step_limit, 
-            other_cells, 
-            potential_map,
-            local_forbidden_cells,
-            freedom 
-        );
-
-        if (candidates.empty()) {
-            continue; // 代替ルートが見つからなかった
-        }
-
-        // 4. 解の更新
-        auto [best_new_cost, best_new_steps, best_new_path] = candidates[0];
-        
-        set<Pos> new_total_cells = other_cells;
-        new_total_cells.insert(best_new_path.begin(), best_new_path.end());
-        int new_C = new_total_cells.size() + 1;
-        
-        if (new_C < best_solution.total_C) {
-            // ★★★ 改善成功！ ★★★
-            cerr << "ローカルサーチ成功: k=" << target_k << " (cell: " << target_cell.first << "," << target_cell.second << ") を更新。 C: " << best_solution.total_C << " -> " << new_C << endl;
-            best_solution.paths_list[target_k] = best_new_path;
-            best_solution.path_cells = new_total_cells;
-            best_solution.total_C = new_C;
-            best_solution.total_steps = other_steps + best_new_steps;
+            // 2. 代替ルートの探索 (target_cell を禁止する)
+            vector<vector<bool>> local_forbidden_cells = forbidden_cells;
+            local_forbidden_cells[target_cell.first][target_cell.second] = true;
             
-            improved = true; // ★ 改善したのでループ継続フラグを立てる
+            set<Pos> other_cells; // C改善の時と同じ
+            for (int k = 0; k < K - 1; ++k) {
+                if (k == target_k) continue; 
+                if (best_solution.paths_list[k].empty()) continue;
+                other_cells.insert(best_solution.paths_list[k].begin(), best_solution.paths_list[k].end());
+            }
             
-            // ★ 改善に成功したら、タブーリストをリセットして最初から探し直す
-            // （たつきさんの指摘した「連鎖反応」を起こすため）
-            tried_improve.clear(); 
+            int current_steps_k = best_solution.paths_list[target_k].size() - 1;
+            int other_steps = best_solution.total_steps - current_steps_k;
+            int step_limit = T - other_steps; // C改善の時と同じ
+
+            vector<DijkstraResult> candidates = find_path_dijkstra_beam(
+                TARGETS[target_k], 
+                TARGETS[target_k + 1], 
+                step_limit, 
+                other_cells, 
+                potential_map, 
+                local_forbidden_cells, 
+                freedom
+            );
+
+            if (candidates.empty()) continue; // 代替ルートが見つからなかった
+
+            // 3. 解の評価と遷移 (T改善専用)
+            auto [best_new_cost, best_new_steps, best_new_path] = candidates[0];
+            
+            set<Pos> new_total_cells = other_cells;
+            new_total_cells.insert(best_new_path.begin(), best_new_path.end());
+            int new_C = new_total_cells.size() + 1;
+            int new_total_steps = other_steps + best_new_steps;
+
+            // ★★★ T改善の評価ロジック ★★★
+            // Tが改善し、かつCが悪化していない場合のみ採用 (山登り法)
+            if (new_total_steps < best_solution.total_steps && 
+                new_C <= best_solution.total_C) 
+            {
+                cerr << "SA (T改善): k=" << target_k << " (cell: " << target_cell.first << "," << target_cell.second << ") を更新。 T: " << best_solution.total_steps << " -> " << new_total_steps << endl;
+
+                best_solution.paths_list[target_k] = best_new_path;
+                best_solution.path_cells = new_total_cells;
+                best_solution.total_C = new_C;
+                best_solution.total_steps = new_total_steps;
+                tried_improve.clear(); // 状態が変化したのでタブーリセット
+            }
         }
-    }
-    // ★★★ ローカルサーチここまで ★★★
+    } // ★★★ 焼きなましここまで ★★★
 
 
     int C_val = best_solution.total_C;
@@ -764,7 +860,7 @@ int main() {
         }
     }
 
-    vector<vector<int>> initial_board(N, vector<int>(N, 0));
+    vector<vector<int>> initial_board(N, vector<int>(N));
     for (auto const& [pos, color] : color_map) {
         initial_board[pos.first][pos.second] = color;
     }

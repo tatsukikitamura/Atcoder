@@ -640,7 +640,7 @@ int main() {
     }
 
     // (C) ★★★ 焼きなまし法 (Simulated Annealing) による改善 ★★★
-    const long long TIME_LIMIT_MS = 1930; // 全体の制限時間
+    const long long TIME_LIMIT_MS = 1970; // 全体の制限時間
     // ★ 温度設定 (C_val の変化は 1 なので、1.0 付近から始めるのが標準的)
     const double START_TEMP = 1.5; // ★ 要調整
     const double END_TEMP = 0.01;  // ★ 要調整

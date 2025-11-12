@@ -7,8 +7,8 @@ inディレクトリ内のすべてのテストケースで実行し、どちら
 # ============================================
 # 設定: 比較するプログラムのファイル名を指定
 # ============================================
-PROGRAM1_NAME = "5.cpp"  # 比較する1つ目のプログラム
-PROGRAM2_NAME = "6.cpp"  # 比較する2つ目のプログラム
+PROGRAM1_NAME = "first/1_1.cpp"  # 比較する1つ目のプログラム
+PROGRAM2_NAME = "second/1.cpp"  # 比較する2つ目のプログラム
 # ============================================
 
 import subprocess
@@ -311,6 +311,18 @@ def main():
     
     print(f"テストケース数: {len(test_cases)}")
     print()
+    
+    # ウォームアップ（初回起動コストを除外するため、最初のテストで両実行ファイルを一度だけ実行）
+    # 計測・比較には含めない
+    try:
+        warmup_case = test_cases[0]
+        _ = run_program(EXEC1, warmup_case)
+        _ = run_program(EXEC2, warmup_case)
+        print(f"[ウォームアップ] {warmup_case.name} で両プログラムを事前実行完了")
+        print()
+    except Exception:
+        # ウォームアップ失敗時は無視して続行（本番計測に影響しないようにする）
+        pass
     
     # 結果を格納
     results = []
