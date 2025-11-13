@@ -594,7 +594,7 @@ int main() {
         X_future -= X_k;
     }
 
-    // --- 5. 最終解の選択 と 焼きなまし法による改善 (提案A + 提案B) ★★★
+    // --- 5. 最終解の選択 と 焼きなまし法による改善 (提案A: 粒子アプローチ) ★★★
     
     // (A) ビームサーチの解（粒子）を取得
     BeamState best_solution; // 総合的な最良解を保持する変数
@@ -646,7 +646,7 @@ int main() {
         // ビームサーチ後の残り時間を計算
         auto sa_start_time_point = chrono::high_resolution_clock::now();
         long long elapsed_ms_before_sa = chrono::duration_cast<chrono::milliseconds>(sa_start_time_point - start_time).count();
-        const long long TIME_LIMIT_MS = 1970;
+        const long long TIME_LIMIT_MS = 1900;
         long long remaining_ms = TIME_LIMIT_MS - elapsed_ms_before_sa;
 
         int N_PARTICLES = min((int)current_beam.size(), BEAM_WIDTH); // 処理する粒子数
@@ -772,7 +772,7 @@ int main() {
                         } 
                         else 
                         {
-                            // --- 近傍B: T改善 (確率20%) ★★★ 提案B実装箇所 ★★★
+                            // --- 近傍B: T改善 (確率20%) ---
                             int target_k = k_dist(rnd_gen); 
                             if (particle_solution.paths_list[target_k].empty()) continue;
                             Pos target_cell = {-1, -1};
@@ -804,32 +804,16 @@ int main() {
                             );
                             if (candidates.empty()) continue; 
 
-                            // 解の評価と遷移 (T改善SA)
+                            // 解の評価と遷移 (T改善)
                             auto [best_new_cost, best_new_steps, best_new_path] = candidates[0];
                             set<Pos> new_total_cells = other_cells;
                             new_total_cells.insert(best_new_path.begin(), best_new_path.end());
                             int new_C = new_total_cells.size() + 1;
                             int new_total_steps = other_steps + best_new_steps;
 
-                            // ★★★ T改善の評価ロジック (提案B) ★★★
-                            // T改善時のC悪化ペナルティ重み (例: 1 C = 10 steps相当)
-                            const double W_C_FOR_T_IMPROVE = 10.0; 
-                            
-                            int delta_T = new_total_steps - particle_solution.total_steps;
-                            int delta_C = new_C - particle_solution.total_C;
-
-                            // Tが改善（delta_T < 0）した場合、Cの悪化（delta_C > 0）をペナルティとする
-                            double delta_score = (double)delta_T + W_C_FOR_T_IMPROVE * (double)max(0, delta_C);
-                            
-                            if (delta_T > 0 && delta_C >= 0) {
-                                // Tが悪化し、Cも悪化 or 維持 の場合は、
-                                // この「T改善」近傍では採用しない (C改善近傍に任せる)
-                                delta_score = 1e9; // 事実上の拒否
-                            }
-
-                            if (delta_score < 0 || sa_prob_dist(rnd_gen) < exp(-delta_score / current_temp)) 
+                            if (new_total_steps < particle_solution.total_steps && 
+                                new_C <= particle_solution.total_C) 
                             {
-                                // cerr << "SA (T改善/SA): k=" << target_k << " を更新。 T: " << particle_solution.total_steps << "->" << new_total_steps << ", C: " << particle_solution.total_C << "->" << new_C << endl;
                                 particle_solution.paths_list[target_k] = best_new_path;
                                 particle_solution.path_cells = new_total_cells;
                                 particle_solution.total_C = new_C;

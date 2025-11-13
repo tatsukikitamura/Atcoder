@@ -7,7 +7,7 @@
 #include <map>
 #include <tuple>
 #include <algorithm>
-#include <chrono> 
+#include <chrono>   
 #include <cmath>     // exp() のために追加
 #include <random>    // 乱数生成のために追加
 
@@ -536,7 +536,7 @@ int main() {
             if (step_limit < X_k) {
                 step_limit = X_k;
             }
-                 
+                    
             vector<DijkstraResult> candidate_paths_info = find_path_dijkstra_beam(
                 start_node, 
                 goal_node, 
@@ -568,7 +568,7 @@ int main() {
                 }
                 candidate_paths_info.push_back({cost, X_k, path_k_fallback});
             }
-                 
+                    
             for (const auto& [cost, steps, path] : candidate_paths_info) {
                 
                 vector<vector<Pos>> new_paths_list = state.paths_list;
@@ -594,7 +594,7 @@ int main() {
         X_future -= X_k;
     }
 
-    // --- 5. 最終解の選択 と 焼きなまし法による改善 (提案A + 提案B) ★★★
+    // --- 5. 最終解の選択 と 焼きなまし法による改善 (★改善ロジック適用済み★) ---
     
     // (A) ビームサーチの解（粒子）を取得
     BeamState best_solution; // 総合的な最良解を保持する変数
@@ -649,249 +649,351 @@ int main() {
         const long long TIME_LIMIT_MS = 1970;
         long long remaining_ms = TIME_LIMIT_MS - elapsed_ms_before_sa;
 
-        int N_PARTICLES = min((int)current_beam.size(), BEAM_WIDTH); // 処理する粒子数
+        // ★ 改善案1: 上位3粒子のみを対象とする
+        int N_PARTICLES = min((int)current_beam.size(), 3); 
         
         // 総合的な最良解を、ビームサーチの最良解で初期化
         best_solution = current_beam[0]; 
         
         if (remaining_ms > 0 && N_PARTICLES > 0) {
-            long long time_per_particle = remaining_ms / N_PARTICLES; // 1粒子あたりの持ち時間
-            cerr << "SA開始: 残り " << remaining_ms << "ms を " << N_PARTICLES << " 粒子で分割 (各" << time_per_particle << "ms)" << endl;
+            
+            // ★ 改善案1: 傾斜配分
+            vector<double> time_allocations;
+            if (N_PARTICLES == 1) {
+                time_allocations = {1.0}; // 1位に100%
+            } else if (N_PARTICLES == 2) {
+                time_allocations = {0.6, 0.4}; // 60%, 40% (例)
+            } else { // N_PARTICLES == 3
+                time_allocations = {0.5, 0.3, 0.2}; // 50%, 30%, 20%
+            }
+            
+            cerr << "SA開始: 残り " << remaining_ms << "ms を " << N_PARTICLES << " 粒子で傾斜配分" << endl;
 
-            if (time_per_particle > 0) { // 1粒子あたりの時間がなければSAをスキップ
+            for (int i = 0; i < N_PARTICLES; ++i) {
                 
-                for (int i = 0; i < N_PARTICLES; ++i) {
-                    
-                    // --- この粒子専用のSA処理を開始 ---
-                    BeamState particle_solution = current_beam[i]; // 現在処理中の粒子
-                    
-                    long long sa_particle_start_time_ms = chrono::duration_cast<chrono::milliseconds>(chrono::high_resolution_clock::now() - start_time).count();
-                    long long sa_particle_end_time_ms = sa_particle_start_time_ms + time_per_particle;
+                // ★ 改善案1: 粒子ごとの持ち時間を計算
+                long long time_per_particle = (long long)(remaining_ms * time_allocations[i]);
+                if (time_per_particle <= 0) continue; // 持ち時間がなければスキップ
 
-                    const double START_TEMP = 1.5; 
-                    const double END_TEMP = 0.01;  
-                    
-                    random_device rd;
-                    mt19937 rnd_gen(rd());
-                    uniform_real_distribution<> sa_prob_dist(0.0, 1.0); 
-                    uniform_int_distribution<> k_dist(0, K - 2);        
-                    set<pair<int, Pos>> tried_improve; 
+                long long sa_particle_start_time_ms = chrono::duration_cast<chrono::milliseconds>(chrono::high_resolution_clock::now() - start_time).count();
+                long long sa_particle_end_time_ms = sa_particle_start_time_ms + time_per_particle;
 
-                    while (true) {
-                        auto current_time = chrono::high_resolution_clock::now();
-                        auto elapsed_ms = chrono::duration_cast<chrono::milliseconds>(current_time - start_time).count();
-                        if (elapsed_ms >= sa_particle_end_time_ms) {
-                            // この粒子の持ち時間を使い切ったらループを抜ける
-                            break; 
-                        }
+                // --- この粒子専用のSA処理を開始 ---
+                BeamState particle_solution = current_beam[i]; // 現在処理中の粒子
+                
+                const double START_TEMP = 1.5; 
+                const double END_TEMP = 0.01; 
+                
+                random_device rd;
+                mt19937 rnd_gen(rd());
+                uniform_real_distribution<> sa_prob_dist(0.0, 1.0); 
+                // uniform_int_distribution<> k_dist(0, K - 2); // <- 元の場所 (改善案2で変更)
+                set<pair<int, Pos>> tried_improve; 
 
-                        double time_ratio = min(1.0, (double)(elapsed_ms - sa_particle_start_time_ms) / time_per_particle);
-                        double current_temp = START_TEMP + (END_TEMP - START_TEMP) * time_ratio;
-                        
-                        // 1. 全マスの使用回数を集計 (この粒子について)
-                        map<Pos, int> usage_count;
-                        for (int k = 0; k < K - 1; ++k) {
-                             if (particle_solution.paths_list[k].empty()) continue;
-                            set<Pos> path_unique_cells(particle_solution.paths_list[k].begin(), particle_solution.paths_list[k].end()); 
-                            for (const auto& cell : path_unique_cells) {
-                                usage_count[cell]++;
-                            }
-                        }
-                        
-                        // 2. ★★★ 近傍探索 (80% C改善 / 20% T改善) ★★★
-                        
-                        if (sa_prob_dist(rnd_gen) < 0.8) 
-                        {
-                            // --- 近傍A: C改善 (確率80%) ---
-                            Pos target_cell = {-1, -1};
-                            int target_k = -1;
-                            
-                            for (int k_idx = segments_info.size() - 1; k_idx >= 0; --k_idx) {
-                                int k = segments_info[k_idx].k; 
-                                if (particle_solution.paths_list[k].empty()) continue;
-                                for (const auto& cell : particle_solution.paths_list[k]) {
-                                    if (usage_count[cell] == 1 && 
-                                        cell != TARGETS[k] && cell != TARGETS[k+1] &&
-                                        tried_improve.find({k, cell}) == tried_improve.end()) { 
-                                        target_cell = cell;
-                                        target_k = k;
-                                        break;
-                                    }
-                                }
-                                if (target_k != -1) break;
-                            }
-                            if (target_k == -1) { tried_improve.clear(); continue; }
-                            tried_improve.insert({target_k, target_cell});
-
-                            // 代替ルートの探索
-                            vector<vector<bool>> local_forbidden_cells = forbidden_cells; 
-                            local_forbidden_cells[target_cell.first][target_cell.second] = true; 
-                            set<Pos> other_cells;
-                            for (int k = 0; k < K - 1; ++k) {
-                                if (k == target_k) continue; 
-                                if (particle_solution.paths_list[k].empty()) continue;
-                                other_cells.insert(particle_solution.paths_list[k].begin(), particle_solution.paths_list[k].end());
-                            }
-                            int current_steps_k = particle_solution.paths_list[target_k].size() - 1;
-                            int other_steps = particle_solution.total_steps - current_steps_k;
-                            int step_limit = T - other_steps; 
-
-                            vector<DijkstraResult> candidates = find_path_dijkstra_beam(
-                                TARGETS[target_k], TARGETS[target_k + 1], step_limit, 
-                                other_cells, potential_map, local_forbidden_cells, freedom 
-                            );
-                            if (candidates.empty()) continue; 
-
-                            // 解の評価と遷移
-                            auto [best_new_cost, best_new_steps, best_new_path] = candidates[0];
-                            set<Pos> new_total_cells = other_cells;
-                            new_total_cells.insert(best_new_path.begin(), best_new_path.end());
-                            int new_C = new_total_cells.size() + 1;
-                            int new_total_steps = other_steps + best_new_steps; 
-                            int delta_score = (new_C - particle_solution.total_C);
-                            if (new_total_steps > T) delta_score += 1e9; 
-
-                            if (delta_score < 0) {
-                                // 改善成功
-                                particle_solution.paths_list[target_k] = best_new_path;
-                                particle_solution.path_cells = new_total_cells;
-                                particle_solution.total_C = new_C;
-                                particle_solution.total_steps = new_total_steps;
-                                tried_improve.clear();
-                            } else {
-                                // 悪化または維持
-                                double probability = exp(-(double)delta_score / current_temp);
-                                if (sa_prob_dist(rnd_gen) < probability) {
-                                    particle_solution.paths_list[target_k] = best_new_path;
-                                    particle_solution.path_cells = new_total_cells;
-                                    particle_solution.total_C = new_C;
-                                    particle_solution.total_steps = new_total_steps;
-                                    tried_improve.clear();
-                                }
-                            }
-                        } 
-                        else 
-                        {
-                            // --- 近傍B: T改善 (確率20%) ★★★ 提案B実装箇所 ★★★
-                            int target_k = k_dist(rnd_gen); 
-                            if (particle_solution.paths_list[target_k].empty()) continue;
-                            Pos target_cell = {-1, -1};
-                            for (const auto& cell : particle_solution.paths_list[target_k]) {
-                                if (usage_count[cell] >= 2 && 
-                                    cell != TARGETS[target_k] && cell != TARGETS[target_k + 1]) {
-                                    target_cell = cell;
-                                    break; 
-                                }
-                            }
-                            if (target_cell.first == -1) continue; 
-
-                            // 代替ルートの探索
-                            vector<vector<bool>> local_forbidden_cells = forbidden_cells;
-                            local_forbidden_cells[target_cell.first][target_cell.second] = true;
-                            set<Pos> other_cells; 
-                            for (int k = 0; k < K - 1; ++k) {
-                                if (k == target_k) continue; 
-                                if (particle_solution.paths_list[k].empty()) continue;
-                                other_cells.insert(particle_solution.paths_list[k].begin(), particle_solution.paths_list[k].end());
-                            }
-                            int current_steps_k = particle_solution.paths_list[target_k].size() - 1;
-                            int other_steps = particle_solution.total_steps - current_steps_k;
-                            int step_limit = T - other_steps; 
-
-                            vector<DijkstraResult> candidates = find_path_dijkstra_beam(
-                                TARGETS[target_k], TARGETS[target_k + 1], step_limit, 
-                                other_cells, potential_map, local_forbidden_cells, freedom
-                            );
-                            if (candidates.empty()) continue; 
-
-                            // 解の評価と遷移 (T改善SA)
-                            auto [best_new_cost, best_new_steps, best_new_path] = candidates[0];
-                            set<Pos> new_total_cells = other_cells;
-                            new_total_cells.insert(best_new_path.begin(), best_new_path.end());
-                            int new_C = new_total_cells.size() + 1;
-                            int new_total_steps = other_steps + best_new_steps;
-
-                            // ★★★ T改善の評価ロジック (提案B) ★★★
-                            // T改善時のC悪化ペナルティ重み (例: 1 C = 10 steps相当)
-                            const double W_C_FOR_T_IMPROVE = 10.0; 
-                            
-                            int delta_T = new_total_steps - particle_solution.total_steps;
-                            int delta_C = new_C - particle_solution.total_C;
-
-                            // Tが改善（delta_T < 0）した場合、Cの悪化（delta_C > 0）をペナルティとする
-                            double delta_score = (double)delta_T + W_C_FOR_T_IMPROVE * (double)max(0, delta_C);
-                            
-                            if (delta_T > 0 && delta_C >= 0) {
-                                // Tが悪化し、Cも悪化 or 維持 の場合は、
-                                // この「T改善」近傍では採用しない (C改善近傍に任せる)
-                                delta_score = 1e9; // 事実上の拒否
-                            }
-
-                            if (delta_score < 0 || sa_prob_dist(rnd_gen) < exp(-delta_score / current_temp)) 
-                            {
-                                // cerr << "SA (T改善/SA): k=" << target_k << " を更新。 T: " << particle_solution.total_steps << "->" << new_total_steps << ", C: " << particle_solution.total_C << "->" << new_C << endl;
-                                particle_solution.paths_list[target_k] = best_new_path;
-                                particle_solution.path_cells = new_total_cells;
-                                particle_solution.total_C = new_C;
-                                particle_solution.total_steps = new_total_steps;
-                                tried_improve.clear();
-                            }
-                        }
-                    } // ★★★ 1粒子のSAここまで ★★★
-
-                    // --- この粒子のSAが終了 ---
-                    // 総合最良解 (`best_solution`) と比較して、良ければ更新する
-                    if (particle_solution < best_solution) {
-                        cerr << "  -> 粒子 " << i << " が総合最良解を更新 (C: " << particle_solution.total_C << ", T: " << particle_solution.total_steps << ")" << endl;
-                        best_solution = particle_solution;
+                while (true) {
+                    auto current_time = chrono::high_resolution_clock::now();
+                    auto elapsed_ms = chrono::duration_cast<chrono::milliseconds>(current_time - start_time).count();
+                    if (elapsed_ms >= sa_particle_end_time_ms) {
+                        // この粒子の持ち時間を使い切ったらループを抜ける
+                        break; 
                     }
 
-                } // --- 全粒子のSAループ終了 ---
-            }
+                    // ★ 改善案1: 時間の進捗率を「粒子ごと」の持ち時間で計算
+                    double time_ratio = min(1.0, (double)(elapsed_ms - sa_particle_start_time_ms) / time_per_particle);
+                    double current_temp = START_TEMP + (END_TEMP - START_TEMP) * time_ratio;
+                    
+                    // ★ 改善案2: T改善用の重み計算 (ステップ数に応じて)
+                    vector<double> k_weights(K - 1);
+                    double total_weight = 0;
+                    for (int k = 0; k < K - 1; ++k) {
+                        if (particle_solution.paths_list[k].empty()) {
+                            k_weights[k] = 0;
+                        } else {
+                            // ステップ数 (size - 1) が 0 の場合も考慮し、最低限の重み (例: 1.0) を保証
+                            double weight = max(1.0, (double)particle_solution.paths_list[k].size() - 1);
+                            k_weights[k] = weight;
+                            total_weight += weight;
+                        }
+                    }
+                    if (total_weight == 0) { // フォールバック (全パスが空/長さ1など)
+                        fill(k_weights.begin(), k_weights.end(), 1.0);
+                    }
+                    discrete_distribution<> k_dist_weighted(k_weights.begin(), k_weights.end());
+
+
+                    // 1. 全マスの使用回数を集計 (この粒子について)
+                    map<Pos, int> usage_count;
+                    for (int k = 0; k < K - 1; ++k) {
+                         if (particle_solution.paths_list[k].empty()) continue;
+                        set<Pos> path_unique_cells(particle_solution.paths_list[k].begin(), particle_solution.paths_list[k].end()); 
+                        for (const auto& cell : path_unique_cells) {
+                            usage_count[cell]++;
+                        }
+                    }
+                    
+                    // 2. ★★★ 近傍探索 (80% C改善 / 20% T改善) ★★★
+                    
+                    if (sa_prob_dist(rnd_gen) < 0.8) 
+                    {
+                        // --- 近傍A: C改善 (確率80%) --- (変更なし)
+                        Pos target_cell = {-1, -1};
+                        int target_k = -1;
+                        
+                        for (int k_idx = segments_info.size() - 1; k_idx >= 0; --k_idx) {
+                            int k = segments_info[k_idx].k; 
+                            if (particle_solution.paths_list[k].empty()) continue;
+                            for (const auto& cell : particle_solution.paths_list[k]) {
+                                if (usage_count[cell] == 1 && 
+                                    cell != TARGETS[k] && cell != TARGETS[k+1] &&
+                                    tried_improve.find({k, cell}) == tried_improve.end()) { 
+                                    target_cell = cell;
+                                    target_k = k;
+                                    break;
+                                }
+                            }
+                            if (target_k != -1) break;
+                        }
+                        if (target_k == -1) { tried_improve.clear(); continue; }
+                        tried_improve.insert({target_k, target_cell});
+
+                        // 代替ルートの探索
+                        vector<vector<bool>> local_forbidden_cells = forbidden_cells; 
+                        local_forbidden_cells[target_cell.first][target_cell.second] = true; 
+                        set<Pos> other_cells;
+                        for (int k = 0; k < K - 1; ++k) {
+                            if (k == target_k) continue; 
+                            if (particle_solution.paths_list[k].empty()) continue;
+                            other_cells.insert(particle_solution.paths_list[k].begin(), particle_solution.paths_list[k].end());
+                        }
+                        int current_steps_k = particle_solution.paths_list[target_k].size() - 1;
+                        int other_steps = particle_solution.total_steps - current_steps_k;
+                        int step_limit = T - other_steps; 
+
+                        vector<DijkstraResult> candidates = find_path_dijkstra_beam(
+                            TARGETS[target_k], TARGETS[target_k + 1], step_limit, 
+                            other_cells, potential_map, local_forbidden_cells, freedom 
+                        );
+                        if (candidates.empty()) continue; 
+
+                        // 解の評価と遷移
+                        auto [best_new_cost, best_new_steps, best_new_path] = candidates[0];
+                        set<Pos> new_total_cells = other_cells;
+                        new_total_cells.insert(best_new_path.begin(), best_new_path.end());
+                        int new_C = new_total_cells.size() + 1;
+                        int new_total_steps = other_steps + best_new_steps; 
+                        int delta_score = (new_C - particle_solution.total_C);
+                        if (new_total_steps > T) delta_score += 1e9; 
+
+                        if (delta_score < 0) {
+                            // 改善成功
+                            particle_solution.paths_list[target_k] = best_new_path;
+                            particle_solution.path_cells = new_total_cells;
+                            particle_solution.total_C = new_C;
+                            particle_solution.total_steps = new_total_steps;
+                            tried_improve.clear();
+                        } else {
+                            // 悪化または維持
+                            double probability = exp(-(double)delta_score / current_temp);
+                            if (sa_prob_dist(rnd_gen) < probability) {
+                                particle_solution.paths_list[target_k] = best_new_path;
+                                particle_solution.path_cells = new_total_cells;
+                                particle_solution.total_C = new_C;
+                                particle_solution.total_steps = new_total_steps;
+                                tried_improve.clear();
+                            }
+                        }
+                    } 
+                    else 
+                    {
+                        // --- 近傍B: T改善 (確率20%) ★★★ 改善案2適用 ★★★
+                        
+                        // int target_k = k_dist(rnd_gen); // <- 元のコード
+                        int target_k = k_dist_weighted(rnd_gen); // ★ 改善後のコード
+
+                        if (particle_solution.paths_list[target_k].empty()) continue;
+                        Pos target_cell = {-1, -1};
+                        for (const auto& cell : particle_solution.paths_list[target_k]) {
+                            if (usage_count[cell] >= 2 && 
+                                cell != TARGETS[target_k] && cell != TARGETS[target_k + 1]) {
+                                target_cell = cell;
+                                break; 
+                            }
+                        }
+                        if (target_cell.first == -1) continue; 
+
+                        // 代替ルートの探索
+                        vector<vector<bool>> local_forbidden_cells = forbidden_cells;
+                        local_forbidden_cells[target_cell.first][target_cell.second] = true;
+                        set<Pos> other_cells; 
+                        for (int k = 0; k < K - 1; ++k) {
+                            if (k == target_k) continue; 
+                            if (particle_solution.paths_list[k].empty()) continue;
+                            other_cells.insert(particle_solution.paths_list[k].begin(), particle_solution.paths_list[k].end());
+                        }
+                        int current_steps_k = particle_solution.paths_list[target_k].size() - 1;
+                        int other_steps = particle_solution.total_steps - current_steps_k;
+                        int step_limit = T - other_steps; 
+
+                        vector<DijkstraResult> candidates = find_path_dijkstra_beam(
+                            TARGETS[target_k], TARGETS[target_k + 1], step_limit, 
+                            other_cells, potential_map, local_forbidden_cells, freedom
+                        );
+                        if (candidates.empty()) continue; 
+
+                        // 解の評価と遷移 (T改善SA)
+                        auto [best_new_cost, best_new_steps, best_new_path] = candidates[0];
+                        set<Pos> new_total_cells = other_cells;
+                        new_total_cells.insert(best_new_path.begin(), best_new_path.end());
+                        int new_C = new_total_cells.size() + 1;
+                        int new_total_steps = other_steps + best_new_steps;
+
+                        // ★★★ T改善の評価ロジック (変更なし) ★★★
+                        const double W_C_FOR_T_IMPROVE = 10.0; 
+                        
+                        int delta_T = new_total_steps - particle_solution.total_steps;
+                        int delta_C = new_C - particle_solution.total_C;
+
+                        // Tが改善（delta_T < 0）した場合、Cの悪化（delta_C > 0）をペナルティとする
+                        double delta_score = (double)delta_T + W_C_FOR_T_IMPROVE * (double)max(0, delta_C);
+                        
+                        if (delta_T > 0 && delta_C >= 0) {
+                            // Tが悪化し、Cも悪化 or 維持 の場合は、
+                            // この「T改善」近傍では採用しない (C改善近傍に任せる)
+                            delta_score = 1e9; // 事実上の拒否
+                        }
+
+                        if (delta_score < 0 || sa_prob_dist(rnd_gen) < exp(-delta_score / current_temp)) 
+                        {
+                            // cerr << "SA (T改善/SA): k=" << target_k << " を更新。 T: " << particle_solution.total_steps << "->" << new_total_steps << ", C: " << particle_solution.total_C << "->" << new_C << endl;
+                            particle_solution.paths_list[target_k] = best_new_path;
+                            particle_solution.path_cells = new_total_cells;
+                            particle_solution.total_C = new_C;
+                            particle_solution.total_steps = new_total_steps;
+                            tried_improve.clear();
+                        }
+                    }
+                } // ★★★ 1粒子のSAここまで ★★★
+
+                // --- この粒子のSAが終了 ---
+                // 総合最良解 (`best_solution`) と比較して、良ければ更新する
+                if (particle_solution < best_solution) {
+                    cerr << "  -> 粒子 " << i << " が総合最良解を更新 (C: " << particle_solution.total_C << ", T: " << particle_solution.total_steps << ")" << endl;
+                    best_solution = particle_solution;
+                }
+
+            } // --- 全粒子のSAループ終了 ---
         } else {
              cerr << "SA時間なし。ビームサーチの最良解を採用します。" << endl;
              // remaining_ms <= 0 の場合、best_solution は C[0] のまま
         }
     } // if (current_beam.empty()) ... else ... の終了
     
-    // --- 6. 色の割り当てと遷移規則の生成 (変更なし) ---
-    // この時点で best_solution には、全粒子でSAを行った後の最良解、
-    // またはフォールバック解が格納されている。
+    // --- 6. ★★★ 高度な座標圧縮と遷移規則の生成 (★置換ロジック★) ★★★
     
-    int C_val = best_solution.total_C;
-    int Q_val = K;
+    // この時点で best_solution には、最良解が格納されている。
+    
+    // 6.1. 「どのマスが」「どの状態で」「どう動くか」のマップを作成
+    //      (Pos -> {q -> {S, D}})
+    map<Pos, map<int, pair<int, char>>> rules_by_pos;
+    
+    // 6.2. 実際に使用する (色c, 状態q) -> (色A, 状態S, 方向D) のルールセットを作成
+    //      同時に、上記 rules_by_pos を構築する
+    set<tuple<int, int, int, int, char>> final_rules_by_color_id;
+    
+    // 6.3. 「動作(map<int, pair<int, char>>)」をキーとして、色IDをマッピングする
+    //      これが「座標圧縮」の核となる
+    map<map<int, pair<int, char>>, int> behavior_to_color_id;
+    int next_color_id = 1; // 色0 (未使用マス) 以外は 1 からスタート
+    
+    // 6.4. 最終的な (Pos -> 色ID) のマッピング
+    map<Pos, int> final_color_map;
 
-    map<Pos, int> color_map;
-    int current_color = 1; 
-    for (const auto& cell : best_solution.path_cells) {
-        if (color_map.find(cell) == color_map.end()) {
-            color_map[cell] = current_color++;
-        }
-    }
-
-    vector<vector<int>> initial_board(N, vector<int>(N));
-    for (auto const& [pos, color] : color_map) {
-        initial_board[pos.first][pos.second] = color;
-    }
-
-    set<tuple<int, int, int, int, char>> rules;
+    
     for (int k = 0; k < K - 1; ++k) {
         vector<Pos>& path = best_solution.paths_list[k];
         if (path.empty()) continue;
+        
         int current_q = k;
+        
         for (size_t p = 0; p < path.size() - 1; ++p) {
             Pos pos = path[p];
             Pos next_pos = path[p+1];
             
-            int c = color_map.count(pos) ? color_map[pos] : 0;
             char d = get_direction(pos, next_pos);
-            int A = c; 
             int S = (next_pos == TARGETS[k + 1]) ? k + 1 : k;
             
-            rules.insert({c, current_q, A, S, d});
+            // このマス(pos)は、状態q=k の時に、{S, D} という動作をする
+            rules_by_pos[pos][current_q] = {S, d};
         }
     }
-    int M_val = rules.size();
+
+    // 6.5. 動作マップ(rules_by_pos)から色IDを決定し、最終的なルールを構築
+    int C_val = 1; // 色0（未使用）の分
+    int Q_val = K;
+
+    // 目的地マス (TARGETS[0]...TARGETS[K-1]) は、
+    // 経路の終点としてSが変わる可能性があるため、先に処理する
+    // (厳密には rules_by_pos に含まれる目的地マスだけでよい)
+    for (int k = 0; k < K; ++k) {
+        Pos pos = TARGETS[k];
+        // この目的地マスが、実際に何らかの経路で使用された場合
+        if (rules_by_pos.count(pos)) { 
+            auto behavior = rules_by_pos[pos];
+            
+            int color_id;
+            // この動作(behavior)パターンに初めて遭遇した場合
+            if (behavior_to_color_id.find(behavior) == behavior_to_color_id.end()) {
+                color_id = next_color_id++;
+                behavior_to_color_id[behavior] = color_id;
+                
+                // この新しい色ID (color_id) が行うべき動作を
+                // final_rules_by_color_id に登録する
+                for (auto const& [q, action] : behavior) {
+                    int S = action.first;
+                    char D = action.second;
+                    int A = color_id; // 色は変えない
+                    final_rules_by_color_id.insert({color_id, q, A, S, D});
+                }
+            } else {
+                // 既に登録済みの動作パターン
+                color_id = behavior_to_color_id[behavior];
+            }
+            
+            // このマス(Pos)には、この色IDを割り当てる
+            final_color_map[pos] = color_id;
+        }
+    }
+
+    // 目的地以外のマスを処理
+    for (auto const& [pos, behavior] : rules_by_pos) {
+        // 既に目的地として処理済みの場合はスキップ
+        if (final_color_map.count(pos)) continue; 
+        
+        int color_id;
+        if (behavior_to_color_id.find(behavior) == behavior_to_color_id.end()) {
+            color_id = next_color_id++;
+            behavior_to_color_id[behavior] = color_id;
+            
+            for (auto const& [q, action] : behavior) {
+                int S = action.first;
+                char D = action.second;
+                int A = color_id;
+                final_rules_by_color_id.insert({color_id, q, A, S, D});
+            }
+        } else {
+            color_id = behavior_to_color_id[behavior];
+        }
+        final_color_map[pos] = color_id;
+    }
+    
+    C_val = next_color_id; // 1 (色0) + (next_color_id - 1) (使った色)
+    int M_val = final_rules_by_color_id.size();
+
+    // 6.6. 初期盤面の生成
+    vector<vector<int>> initial_board(N, vector<int>(N, 0)); // 全て0で初期化
+    for (auto const& [pos, color] : final_color_map) {
+        initial_board[pos.first][pos.second] = color;
+    }
 
 
     // --- 7. 出力 (変更なし) ---
@@ -902,7 +1004,8 @@ int main() {
         }
         cout << "\n";
     }
-    for (const auto& rule : rules) {
+    // ★ 6.5で作成した圧縮済みのルールセットを出力
+    for (const auto& rule : final_rules_by_color_id) { 
         cout << get<0>(rule) << " " << get<1>(rule) << " " 
              << get<2>(rule) << " " << get<3>(rule) << " " 
              << get<4>(rule) << "\n";
@@ -912,6 +1015,7 @@ int main() {
     auto duration = chrono::duration_cast<chrono::milliseconds>(end_time - start_time);
     cerr << "実行時間: " << duration.count() << " ms" << endl;
     cerr << "スコア (C+Q): " << (C_val + Q_val) << endl;
+    cerr << "圧縮後のC: " << C_val << ", Q: " << Q_val << endl;
     cerr << "BW: " << BEAM_WIDTH << ", NPPS: " << N_PATHS_PER_STATE << endl;
 
     return 0;

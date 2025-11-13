@@ -646,7 +646,7 @@ int main() {
         // ビームサーチ後の残り時間を計算
         auto sa_start_time_point = chrono::high_resolution_clock::now();
         long long elapsed_ms_before_sa = chrono::duration_cast<chrono::milliseconds>(sa_start_time_point - start_time).count();
-        const long long TIME_LIMIT_MS = 1970;
+        const long long TIME_LIMIT_MS = 1900;
         long long remaining_ms = TIME_LIMIT_MS - elapsed_ms_before_sa;
 
         int N_PARTICLES = min((int)current_beam.size(), BEAM_WIDTH); // 処理する粒子数
