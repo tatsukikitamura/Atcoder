@@ -1,0 +1,29 @@
+CompileFlags:
+  Add: 
+    - -std=c++17
+    - -Wall
+    - -Wextra
+    - -Wno-narrowing
+    - -xc++
+    - -isysroot
+    - /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
+    - -I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include/c++/v1
+    - -I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include
+    - -I/opt/homebrew/include
+    - -I/Library/Developer/CommandLineTools/usr/include/c++/v1
+    - -I/Library/Developer/CommandLineTools/usr/lib/clang/*/include
+    - -I/Library/Developer/CommandLineTools/usr/include
+  Remove:
+    - -W*
+
+Diagnostics:
+  UnusedIncludes: None
+  MissingIncludes: None
+  ClangTidy:
+    Add: []
+    Remove:
+      - '*'
+  
+Index:
+  Background: Build
+

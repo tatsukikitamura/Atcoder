@@ -152,12 +152,12 @@ const long long BASE_COST_SCALE = 10000; // C(新規マス)のペナルティ
 const long long HEURISTIC_WEIGHT = 1;
 const long long LOOP_PENALTY_WEIGHT = 1500; 
 const int LOOP_PENALTY_THRESHOLD = 5; 
-const long long REWARD_WEIGHT = 50; // ★ 既存マス使用時の報酬 (要調整)
+// const long long REWARD_WEIGHT = 50;     // (削除)
+const long long TURN_PENALTY_WEIGHT = 50; // ★ 方向転換ペナルティ (要調整)
 
 vector<DijkstraResult> find_path_dijkstra_beam(
     Pos start_pos, Pos goal_pos, int step_limit, 
-    // const set<Pos>& total_path_cells, // <-- 変更前
-    const map<Pos, int>& usage_count, // <-- 変更後
+    const set<Pos>& total_path_cells, // ★ 変更 (setに戻す)
     const vector<vector<int>>& potential_map, 
     const vector<vector<bool>>& forbidden_cells, 
     const vector<vector<int>>& freedom 
@@ -170,7 +170,7 @@ vector<DijkstraResult> find_path_dijkstra_beam(
     map<Pos, map<int, long long>> dist;
     dist[start_pos][0] = 0;
 
-    map<Pos, map<int, pair<Pos, int>>> prev;
+    map<Pos, map<int, pair<Pos, int>>> prev; // 経路復元と方向特定用
 
     vector<pair<long long, int>> found_goals;
 
@@ -180,6 +180,14 @@ vector<DijkstraResult> find_path_dijkstra_beam(
         Pos pos;
         tie(cost, steps, pos) = pq.top();
         pq.pop();
+
+        // ★ 変更点: ここで「入ってきた方向」を取得
+        char incoming_d = 'S'; // 'S' = Start/Stop
+        if (steps > 0 && prev.count(pos) && prev[pos].count(steps)) {
+            Pos prev_pos = prev[pos][steps].first;
+            incoming_d = get_direction(prev_pos, pos);
+        }
+        // ★ 変更点ここまで
 
         if (dist.count(pos) && dist[pos].count(steps) && dist[pos][steps] < cost) {
             continue;
@@ -194,7 +202,7 @@ vector<DijkstraResult> find_path_dijkstra_beam(
             continue;
         }
 
-        for (char d : {'U', 'D', 'L', 'R'}) {
+        for (char d : {'U', 'D', 'L', 'R'}) { // d は「出ていく方向」
             if (can_move(pos.first, pos.second, d)) {
                 Pos next_pos = get_next_pos(pos.first, pos.second, d);
 
@@ -205,9 +213,13 @@ vector<DijkstraResult> find_path_dijkstra_beam(
                 int next_steps = steps + 1;
                 long long new_cost = cost; 
                 
-                // ★ 変更点: コスト関数 ★
-                // if (total_path_cells.find(next_pos) == total_path_cells.end()) { // <-- 変更前
-                if (usage_count.find(next_pos) == usage_count.end()) { // <-- 変更後
+                // ★ 変更点: 方向転換ペナルティを加算
+                if (incoming_d != 'S' && d != incoming_d) {
+                    new_cost += TURN_PENALTY_WEIGHT;
+                }
+
+                // ★ 変更点: コスト関数 (setベースに戻す)
+                if (total_path_cells.find(next_pos) == total_path_cells.end()) { 
                     // --- 新規マス ---
                     new_cost += BASE_COST_SCALE; 
                     new_cost += HEURISTIC_WEIGHT * potential_map[next_pos.first][next_pos.second];
@@ -216,13 +228,10 @@ vector<DijkstraResult> find_path_dijkstra_beam(
                         potential_map[next_pos.first][next_pos.second] >= LOOP_PENALTY_THRESHOLD) {
                         new_cost += LOOP_PENALTY_WEIGHT;
                     }
-                } else {
-                    // --- 既存マス (★報酬を追加) ---
-                    // 使用回数が多いほど報酬（マイナスコスト）を増やす
-                    new_cost -= (long long)usage_count.at(next_pos) * REWARD_WEIGHT;
-                }
-                // ★ 変更点ここまで ★
-
+                } 
+                // (既存マスの報酬ロジックは削除)
+                
+                // ... (以降のパレート最適ロジックは変更なし) ...
 
                 bool is_dominated = false;
                 if (dist.count(next_pos)) {
@@ -251,7 +260,7 @@ vector<DijkstraResult> find_path_dijkstra_beam(
                 }
 
                 dist[next_pos][next_steps] = new_cost;
-                prev[next_pos][next_steps] = {pos, steps};
+                prev[next_pos][next_steps] = {pos, steps}; 
                 pq.push({new_cost, next_steps, next_pos});
             }
         }
@@ -277,13 +286,12 @@ vector<DijkstraResult> find_path_dijkstra_beam(
 
 // --- 4. メインロジック (ビームサーチ) ---
 
-// ★ 変更点: BeamState 構造体
+// ★ 変更点: BeamState 構造体 (setに戻す)
 struct BeamState {
     vector<vector<Pos>> paths_list;
-    // set<Pos> path_cells; // <-- 変更前
-    map<Pos, int> usage_count; // <-- 変更後: マスごとの経路使用回数
+    set<Pos> path_cells; // ★ 変更
     int total_steps;
-    int total_C; // (ヒューリスティックなC。unique(usage_count.size()) + 1)
+    int total_C; // (ヒューリスティックなC。path_cells.size() + 1)
 
     bool operator<(const BeamState& other) const {
         if (total_C != other.total_C) {
@@ -516,10 +524,9 @@ int main() {
 
     // 4.4. ビームサーチの実行 (★変更あり★)
     vector<BeamState> current_beam;
-    // set<Pos> initial_cells = {TARGETS[0]}; // <-- 変更前
-    map<Pos, int> initial_usage_count = {{TARGETS[0], 1}}; // <-- 変更後
-    int initial_C = initial_usage_count.size() + 1; 
-    current_beam.push_back({vector<vector<Pos>>(K - 1), initial_usage_count, 0, initial_C});
+    set<Pos> initial_cells = {TARGETS[0]}; // ★ 変更 (setに戻す)
+    int initial_C = initial_cells.size() + 1; 
+    current_beam.push_back({vector<vector<Pos>>(K - 1), initial_cells, 0, initial_C});
 
     double X_future = total_shortest_steps_X;
 
@@ -555,7 +562,7 @@ int main() {
                 start_node, 
                 goal_node, 
                 step_limit, 
-                state.usage_count, // <-- 変更後
+                state.path_cells, // ★ 変更 (setに戻す)
                 potential_map,
                 forbidden_cells, 
                 freedom
@@ -568,18 +575,15 @@ int main() {
                     if (forbidden_cells[cell.first][cell.second]) {
                         is_forbidden = true;
                     }
-                    // if (state.path_cells.find(cell) == state.path_cells.end()) { // <-- 変更前
-                    if (state.usage_count.find(cell) == state.usage_count.end()) { // <-- 変更後
+                    if (state.path_cells.find(cell) == state.path_cells.end()) { // ★ 変更 (setに戻す)
                         cost += BASE_COST_SCALE; 
                         cost += HEURISTIC_WEIGHT * potential_map[cell.first][cell.second];
                         if (freedom[cell.first][cell.second] == 2 && 
                             potential_map[cell.first][cell.second] >= LOOP_PENALTY_THRESHOLD) {
                             cost += LOOP_PENALTY_WEIGHT;
                         }
-                    } else {
-                        // ★ 変更後: フォールバックでも報酬を考慮
-                        cost -= (long long)state.usage_count.at(cell) * REWARD_WEIGHT;
-                    }
+                    } 
+                    // (報酬ロジックは削除)
                 }
                 if (is_forbidden) {
                     cost += 1e18; 
@@ -592,22 +596,13 @@ int main() {
                 vector<vector<Pos>> new_paths_list = state.paths_list;
                 new_paths_list[k] = path;
                 
-                // set<Pos> new_path_cells = state.path_cells; // <-- 変更前
-                // new_path_cells.insert(path.begin(), path.end()); // <-- 変更前
+                set<Pos> new_path_cells = state.path_cells; // ★ 変更 (setに戻す)
+                new_path_cells.insert(path.begin(), path.end()); // ★ 変更 (setに戻す)
 
-                // ★ 変更後: usage_count を更新
-                map<Pos, int> new_usage_count = state.usage_count;
-                // path内のユニークなマスに対してカウントを+1する
-                set<Pos> path_unique_cells(path.begin(), path.end());
-                for (const auto& cell : path_unique_cells) {
-                    new_usage_count[cell]++;
-                }
-                
                 int new_total_steps = state.total_steps + steps;
-                // int new_total_C = new_path_cells.size() + 1; // <-- 変更前
-                int new_total_C = new_usage_count.size() + 1; // <-- 変更後 (ヒューリスティックC)
+                int new_total_C = new_path_cells.size() + 1; // ★ 変更 (setに戻す)
                 
-                next_beam.push_back({new_paths_list, new_usage_count, new_total_steps, new_total_C});
+                next_beam.push_back({new_paths_list, new_path_cells, new_total_steps, new_total_C});
             }
         }
 
@@ -624,25 +619,19 @@ int main() {
     // --- 5. 最終解の選択 と 焼きなまし法による改善 (★変更あり★) ---
     
     // (A) ビームサーチの解（粒子）を取得
-    BeamState best_solution; // 総合的な最良解を保持する変数
+    BeamState best_solution; 
     
     if (current_beam.empty()) {
         cerr << "警告: ビームが空です。最短経路でフォールバックします。" << endl;
         vector<vector<Pos>> fallback_paths;
-        // set<Pos> fallback_cells = {TARGETS[0]}; // <-- 変更前
-        map<Pos, int> fallback_usage_count = {{TARGETS[0], 0}}; // <-- 変更後
+        set<Pos> fallback_cells = {TARGETS[0]}; // ★ 変更 (setに戻す)
         int fallback_total_steps = 0;
         for (int k = 0; k < K - 1; ++k) {
             fallback_paths.push_back(all_shortest_paths_fallback[k]);
-            // fallback_cells.insert(all_shortest_paths_fallback[k].begin(), all_shortest_paths_fallback[k].end()); // <-- 変更前
-            set<Pos> path_unique(all_shortest_paths_fallback[k].begin(), all_shortest_paths_fallback[k].end());
-            for(const auto& cell : path_unique) {
-                fallback_usage_count[cell]++; // <-- 変更後
-            }
+            fallback_cells.insert(all_shortest_paths_fallback[k].begin(), all_shortest_paths_fallback[k].end()); // ★ 変更 (setに戻す)
             fallback_total_steps += shortest_lengths[k];
         }
-        // best_solution = {fallback_paths, fallback_cells, fallback_total_steps, (int)fallback_cells.size() + 1}; // <-- 変更前
-        best_solution = {fallback_paths, fallback_usage_count, fallback_total_steps, (int)fallback_usage_count.size() + 1}; // <-- 変更後
+        best_solution = {fallback_paths, fallback_cells, fallback_total_steps, (int)fallback_cells.size() + 1}; // ★ 変更 (setに戻す)
     } else {
         
         // (B) 不完全な解を補完 (全粒子に適用)
@@ -657,24 +646,18 @@ int main() {
 
             if (is_incomplete) {
                 cerr << "警告: 途中の解が不完全です。最短経路で補完します。" << endl;
-                // set<Pos> new_cells = state.path_cells; // <-- 変更前
-                map<Pos, int> new_usage_count = state.usage_count; // <-- 変更後
+                set<Pos> new_cells = state.path_cells; // ★ 変更 (setに戻す)
                 vector<vector<Pos>> new_paths = state.paths_list;
                 int new_steps = state.total_steps;
                 
                 for (int k = 0; k < K - 1; ++k) {
                     if (new_paths[k].empty()) {
                         new_paths[k] = all_shortest_paths_fallback[k];
-                        // new_cells.insert(all_shortest_paths_fallback[k].begin(), all_shortest_paths_fallback[k].end()); // <-- 変更前
-                        set<Pos> path_unique(all_shortest_paths_fallback[k].begin(), all_shortest_paths_fallback[k].end()); // <-- 変更後
-                        for(const auto& cell : path_unique) { // <-- 変更後
-                            new_usage_count[cell]++; // <-- 変更後
-                        }
+                        new_cells.insert(all_shortest_paths_fallback[k].begin(), all_shortest_paths_fallback[k].end()); // ★ 変更 (setに戻す)
                         new_steps += shortest_lengths[k];
                     }
                 }
-                // state = {new_paths, new_cells, new_steps, (int)new_cells.size() + 1}; // <-- 変更前
-                state = {new_paths, new_usage_count, new_steps, (int)new_usage_count.size() + 1}; // <-- 変更後
+                state = {new_paths, new_cells, new_steps, (int)new_cells.size() + 1}; // ★ 変更 (setに戻す)
             }
         }
         
@@ -747,12 +730,12 @@ int main() {
                     discrete_distribution<> k_dist_weighted(k_weights.begin(), k_weights.end());
 
                     // ★ 変更点: SAループ内で usage_count を毎回計算
-                    map<Pos, int> current_usage_count;
+                    map<Pos, int> usage_count;
                     for (int k = 0; k < K - 1; ++k) {
                          if (particle_solution.paths_list[k].empty()) continue;
                         set<Pos> path_unique_cells(particle_solution.paths_list[k].begin(), particle_solution.paths_list[k].end()); 
                         for (const auto& cell : path_unique_cells) {
-                            current_usage_count[cell]++;
+                            usage_count[cell]++;
                         }
                     }
                     
@@ -766,8 +749,7 @@ int main() {
                             int k = segments_info[k_idx].k; 
                             if (particle_solution.paths_list[k].empty()) continue;
                             for (const auto& cell : particle_solution.paths_list[k]) {
-                                // ★ 変更点: current_usage_count を使用
-                                if (current_usage_count[cell] == 1 && 
+                                if (usage_count.count(cell) && usage_count[cell] == 1 && // ★ 変更 (usage_count)
                                     cell != TARGETS[k] && cell != TARGETS[k+1] &&
                                     tried_improve.find({k, cell}) == tried_improve.end()) { 
                                     target_cell = cell;
@@ -783,15 +765,11 @@ int main() {
                         vector<vector<bool>> local_forbidden_cells = forbidden_cells; 
                         local_forbidden_cells[target_cell.first][target_cell.second] = true; 
                         
-                        // ★ 変更点: 他の経路の usage_count を作成
-                        map<Pos, int> other_usage_count;
+                        set<Pos> other_cells; // ★ 変更 (setに戻す)
                         for (int k = 0; k < K - 1; ++k) {
                             if (k == target_k) continue; 
                             if (particle_solution.paths_list[k].empty()) continue;
-                            set<Pos> path_unique(particle_solution.paths_list[k].begin(), particle_solution.paths_list[k].end());
-                            for(const auto& cell : path_unique) {
-                                other_usage_count[cell]++;
-                            }
+                            other_cells.insert(particle_solution.paths_list[k].begin(), particle_solution.paths_list[k].end()); // ★ 変更
                         }
 
                         int current_steps_k = particle_solution.paths_list[target_k].size() - 1;
@@ -800,26 +778,22 @@ int main() {
 
                         vector<DijkstraResult> candidates = find_path_dijkstra_beam(
                             TARGETS[target_k], TARGETS[target_k + 1], step_limit, 
-                            other_usage_count, potential_map, local_forbidden_cells, freedom // <-- 変更
+                            other_cells, potential_map, local_forbidden_cells, freedom // ★ 変更
                         );
                         if (candidates.empty()) continue; 
 
                         auto [best_new_cost, best_new_steps, best_new_path] = candidates[0];
                         
-                        // ★ 変更点: 新しい usage_count で評価
-                        map<Pos, int> new_total_usage_count = other_usage_count;
-                        set<Pos> new_path_unique_cells(best_new_path.begin(), best_new_path.end());
-                        for (const auto& cell : new_path_unique_cells) {
-                            new_total_usage_count[cell]++;
-                        }
-                        int new_C = new_total_usage_count.size() + 1;
+                        set<Pos> new_total_cells = other_cells; // ★ 変更 (setに戻す)
+                        new_total_cells.insert(best_new_path.begin(), best_new_path.end()); // ★ 変更
+                        int new_C = new_total_cells.size() + 1; // ★ 変更
                         int new_total_steps = other_steps + best_new_steps; 
-                        int delta_score = (new_C - particle_solution.total_C); // total_C は particle_solution の古い C
+                        int delta_score = (new_C - particle_solution.total_C);
                         if (new_total_steps > T) delta_score += 1e9; 
 
                         if (delta_score < 0) {
                             particle_solution.paths_list[target_k] = best_new_path;
-                            particle_solution.usage_count = new_total_usage_count; // ★ 更新
+                            particle_solution.path_cells = new_total_cells; // ★ 更新
                             particle_solution.total_C = new_C; // ★ 更新
                             particle_solution.total_steps = new_total_steps; // ★ 更新
                             tried_improve.clear();
@@ -827,7 +801,7 @@ int main() {
                             double probability = exp(-(double)delta_score / current_temp);
                             if (sa_prob_dist(rnd_gen) < probability) {
                                 particle_solution.paths_list[target_k] = best_new_path;
-                                particle_solution.usage_count = new_total_usage_count; // ★ 更新
+                                particle_solution.path_cells = new_total_cells; // ★ 更新
                                 particle_solution.total_C = new_C; // ★ 更新
                                 particle_solution.total_steps = new_total_steps; // ★ 更新
                                 tried_improve.clear();
@@ -842,8 +816,7 @@ int main() {
                         if (particle_solution.paths_list[target_k].empty()) continue;
                         Pos target_cell = {-1, -1};
                         for (const auto& cell : particle_solution.paths_list[target_k]) {
-                            // ★ 変更点: current_usage_count を使用
-                            if (current_usage_count[cell] >= 2 && 
+                            if (usage_count.count(cell) && usage_count[cell] >= 2 && // ★ 変更 (usage_count)
                                 cell != TARGETS[target_k] && cell != TARGETS[target_k + 1]) {
                                 target_cell = cell;
                                 break; 
@@ -854,15 +827,11 @@ int main() {
                         vector<vector<bool>> local_forbidden_cells = forbidden_cells;
                         local_forbidden_cells[target_cell.first][target_cell.second] = true;
                         
-                        // ★ 変更点: 他の経路の usage_count を作成
-                        map<Pos, int> other_usage_count;
+                        set<Pos> other_cells; // ★ 変更 (setに戻す)
                         for (int k = 0; k < K - 1; ++k) {
                             if (k == target_k) continue; 
                             if (particle_solution.paths_list[k].empty()) continue;
-                            set<Pos> path_unique(particle_solution.paths_list[k].begin(), particle_solution.paths_list[k].end());
-                            for(const auto& cell : path_unique) {
-                                other_usage_count[cell]++;
-                            }
+                            other_cells.insert(particle_solution.paths_list[k].begin(), particle_solution.paths_list[k].end()); // ★ 変更
                         }
                         
                         int current_steps_k = particle_solution.paths_list[target_k].size() - 1;
@@ -871,19 +840,15 @@ int main() {
 
                         vector<DijkstraResult> candidates = find_path_dijkstra_beam(
                             TARGETS[target_k], TARGETS[target_k + 1], step_limit, 
-                            other_usage_count, potential_map, local_forbidden_cells, freedom // <-- 変更
+                            other_cells, potential_map, local_forbidden_cells, freedom // ★ 変更
                         );
                         if (candidates.empty()) continue; 
 
                         auto [best_new_cost, best_new_steps, best_new_path] = candidates[0];
                         
-                        // ★ 変更点: 新しい usage_count で評価
-                        map<Pos, int> new_total_usage_count = other_usage_count;
-                        set<Pos> new_path_unique_cells(best_new_path.begin(), best_new_path.end());
-                        for (const auto& cell : new_path_unique_cells) {
-                            new_total_usage_count[cell]++;
-                        }
-                        int new_C = new_total_usage_count.size() + 1;
+                        set<Pos> new_total_cells = other_cells; // ★ 変更 (setに戻す)
+                        new_total_cells.insert(best_new_path.begin(), best_new_path.end()); // ★ 変更
+                        int new_C = new_total_cells.size() + 1; // ★ 変更
                         int new_total_steps = other_steps + best_new_steps;
 
                         const double W_C_FOR_T_IMPROVE = 10.0; 
@@ -900,7 +865,7 @@ int main() {
                         if (delta_score < 0 || sa_prob_dist(rnd_gen) < exp(-delta_score / current_temp)) 
                         {
                             particle_solution.paths_list[target_k] = best_new_path;
-                            particle_solution.usage_count = new_total_usage_count; // ★ 更新
+                            particle_solution.path_cells = new_total_cells; // ★ 更新
                             particle_solution.total_C = new_C; // ★ 更新
                             particle_solution.total_steps = new_total_steps; // ★ 更新
                             tried_improve.clear();
@@ -919,7 +884,7 @@ int main() {
         }
     } // if (current_beam.empty()) ... else ... の終了
     
-    // --- 6. ★★★ 高度な座標圧縮と遷移規則の生成 (変更なし) ★★★
+    // --- 6. ★★★ 高度な座標圧縮と遷移規則の生成 (★TLE対策 変更済み★) ★★★
     
     // この時点で best_solution には、最良解が格納されている。
     
@@ -929,8 +894,8 @@ int main() {
     // 6.2. 実際に使用するルールセット
     set<tuple<int, int, int, int, char>> final_rules_by_color_id;
     
-    // 6.3. 「動作」 -> 色ID のマッピング
-    map<vector<tuple<int, int, char>>, int> behavior_to_color_id_vec;
+    // 6.3. 「動作」 -> 色ID のマッピング (★ TLE対策: mapキーをvectorキーに変更)
+    map<vector<tuple<int, int, char>>, int> behavior_to_color_id_vec; 
     int next_color_id = 1; // 色0 (未使用マス) 以外は 1 からスタート
     
     // 6.4. 最終的な (Pos -> 色ID) のマッピング
@@ -958,67 +923,30 @@ int main() {
     int C_val = 1; 
     int Q_val = K;
 
-    // 目的地マスを先に処理
-    for (int k = 0; k < K; ++k) {
-        Pos pos = TARGETS[k];
-        if (rules_by_pos.count(pos)) { 
-            auto behavior_map = rules_by_pos[pos];
-            
-            // ★ map -> vector 変換
-            vector<tuple<int, int, char>> behavior_vec;
-            for (auto const& [q, action] : behavior_map) {
-                behavior_vec.emplace_back(q, action.first, action.second); // (q, S, D)
-            }
-            // ★ ソートは不要 (mapから来ているので既にqでソート済み)
-            
-            int color_id;
-            // この動作(behavior)パターンに初めて遭遇した場合
-            if (behavior_to_color_id_vec.find(behavior_vec) == behavior_to_color_id_vec.end()) {
-                color_id = next_color_id++;
-                behavior_to_color_id_vec[behavior_vec] = color_id;
-                
-                // この新しい色ID (color_id) が行うべき動作を
-                // final_rules_by_color_id に登録する
-                for (auto const& [q, S, D] : behavior_vec) {
-                    int A = color_id; // 色は変えない
-                    final_rules_by_color_id.insert({color_id, q, A, S, D});
-                }
-            } else {
-                // 既に登録済みの動作パターン
-                color_id = behavior_to_color_id_vec[behavior_vec];
-            }
-            
-            // このマス(Pos)には、この色IDを割り当てる
-            final_color_map[pos] = color_id;
-        }
-    }
-
-    // 目的地以外のマスを処理
+    // (★ TLE対策: 目的地マスを先に処理する必要はなくなったため、ループを1つに統合)
     for (auto const& [pos, behavior_map] : rules_by_pos) {
-        if (final_color_map.count(pos)) continue; 
         
-        // ★ map -> vector 変換
+        // ★ TLE対策: map -> vector 変換
         vector<tuple<int, int, char>> behavior_vec;
         for (auto const& [q, action] : behavior_map) {
             behavior_vec.emplace_back(q, action.first, action.second); // (q, S, D)
         }
         // ★ ソートは不要 (mapから来ているので既にqでソート済み)
-        
+
         int color_id;
         // この動作(behavior)パターンに初めて遭遇した場合
-        if (behavior_to_color_id_vec.find(behavior_vec) == behavior_to_color_id_vec.end()) {
+        if (behavior_to_color_id_vec.find(behavior_vec) == behavior_to_color_id_vec.end()) { // ★ 変更
             color_id = next_color_id++;
-            behavior_to_color_id_vec[behavior_vec] = color_id;
+            behavior_to_color_id_vec[behavior_vec] = color_id; // ★ 変更
             
-            // この新しい色ID (color_id) が行うべき動作を
-            // final_rules_by_color_id に登録する
-            for (auto const& [q, S, D] : behavior_vec) {
-                int A = color_id; // 色は変えない
+            // この新しい色ID (color_id) が行うべき動作を登録
+            for (auto const& [q, S, D] : behavior_vec) { // ★ 変更
+                int A = color_id; 
                 final_rules_by_color_id.insert({color_id, q, A, S, D});
             }
         } else {
             // 既に登録済みの動作パターン
-            color_id = behavior_to_color_id_vec[behavior_vec];
+            color_id = behavior_to_color_id_vec[behavior_vec]; // ★ 変更
         }
         
         // このマス(Pos)には、この色IDを割り当てる
