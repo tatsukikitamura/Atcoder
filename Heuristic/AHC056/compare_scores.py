@@ -7,8 +7,8 @@ inディレクトリ内のすべてのテストケースで実行し、どちら
 # ============================================
 # 設定: 比較するプログラムのファイル名を指定
 # ============================================
-PROGRAM1_NAME = "second/7.cpp"  # 比較する1つ目のプログラム
-PROGRAM2_NAME = "second/6.cpp"  # 比較する2つ目のプログラム
+PROGRAM1_NAME = "approach/second/1.cpp"  # 比較する1つ目のプログラム
+PROGRAM2_NAME = "approach/second/2.cpp"  # 比較する2つ目のプログラム
 # ============================================
 
 import subprocess
@@ -21,11 +21,11 @@ from typing import Optional, Tuple
 
 # ディレクトリ設定
 BASE_DIR = Path(__file__).parent
-IN_DIR = BASE_DIR / "in2"
+IN_DIR = BASE_DIR / "test/in2"
 PROGRAM1 = BASE_DIR / PROGRAM1_NAME
 PROGRAM2 = BASE_DIR / PROGRAM2_NAME
-EXEC1 = BASE_DIR / PROGRAM1_NAME.replace(".cpp", "")
-EXEC2 = BASE_DIR / PROGRAM2_NAME.replace(".cpp", "")
+EXEC1 = (BASE_DIR / PROGRAM1_NAME.replace(".cpp", "")).resolve()
+EXEC2 = (BASE_DIR / PROGRAM2_NAME.replace(".cpp", "")).resolve()
 
 def get_sdk_path() -> Optional[str]:
     """macOS SDKのパスを取得（Xcode.appを優先、次にCommand Line Tools）"""
