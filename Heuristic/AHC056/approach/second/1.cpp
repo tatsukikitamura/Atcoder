@@ -1014,7 +1014,7 @@ int main() {
                             // 評価 (T改善なので、Cが悪化しなければ採用)
                             if (new_C <= particle_solution.total_C) {
                                 particle_solution.paths_list[k] = new_path;
-                                particle_solution.path_cells = new_total_cells;
+                                particle_solution.path_cells = new_path_cells;
                                 particle_solution.total_C = new_C;
                                 particle_solution.total_steps = new_total_steps;
                                 DYN_PARAMS.update_sa_improvements();

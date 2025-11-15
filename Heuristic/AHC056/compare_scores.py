@@ -7,7 +7,7 @@ inディレクトリ内のすべてのテストケースで実行し、どちら
 # ============================================
 # 設定: 比較するプログラムのファイル名を指定
 # ============================================
-PROGRAM1_NAME = "approach/second/1.cpp"  # 比較する1つ目のプログラム
+PROGRAM1_NAME = "approach/first/2.cpp"  # 比較する1つ目のプログラム
 PROGRAM2_NAME = "approach/second/2.cpp"  # 比較する2つ目のプログラム
 # ============================================
 
@@ -177,19 +177,25 @@ def calculate_visited_destinations(N: int, K: int, T: int, targets: list, rules:
     current_pos = targets[0]
     visited.add(0)  # 最初の目的地は訪問済み
     
+    # シミュレーション用のボード（色の変更を反映するため）
+    sim_board = [row[:] for row in board]  # ボードのコピーを作成
+    
     # ステップ数の上限までシミュレート
     for step in range(T):
         # 現在位置の色を取得
         i, j = current_pos
         if i < 0 or i >= N or j < 0 or j >= N:
             break
-        c = board[i][j]
+        c = sim_board[i][j]  # シミュレーション用のボードから色を取得
         
         key = (c, current_q)
         if key not in transition:
             break
         
         a, s, d = transition[key]
+        
+        # 色を変更（移動前に色を変更）
+        sim_board[i][j] = a
         current_q = s
         
         # 移動方向に応じて位置を更新（壁をチェック）
@@ -223,9 +229,9 @@ def calculate_visited_destinations(N: int, K: int, T: int, targets: list, rules:
         current_pos = next_pos
         
         # 目的地に到達したかチェック
-        for i, target in enumerate(targets):
-            if current_pos == target and i not in visited:
-                visited.add(i)
+        for idx, target in enumerate(targets):
+            if current_pos == target and idx not in visited:
+                visited.add(idx)
                 if len(visited) == K:
                     return K
     

@@ -293,6 +293,8 @@ struct Segment {
 
 
 int main() {
+    auto start_time = chrono::high_resolution_clock::now(); // 時間計測開始
+    
     ios::sync_with_stdio(false);
     cin.tie(NULL);
 
@@ -303,8 +305,6 @@ int main() {
     for (int i = 0; i < N; ++i) cin >> V_WALLS[i];
     for (int i = 0; i < N - 1; ++i) cin >> H_WALLS[i];
     for (int i = 0; i < K; ++i) cin >> TARGETS[i].first >> TARGETS[i].second;
-
-    auto start_time = chrono::high_resolution_clock::now(); // 時間計測開始
 
     // --- パラメータ調整 (変更なし) ---
     double density = static_cast<double>(K) / (static_cast<double>(N) * static_cast<double>(N));
@@ -594,7 +594,7 @@ int main() {
         X_future -= X_k;
     }
 
-    // --- 5. 最終解の選択 と 焼きなまし法による改善 (★改善ロジック適用済み★) ---
+    // --- 5. 最終解の選択 と 焼きなまし法による改善 (★改善点あり★) ---
     
     // (A) ビームサーチの解（粒子）を取得
     BeamState best_solution; // 総合的な最良解を保持する変数
@@ -646,7 +646,7 @@ int main() {
         // ビームサーチ後の残り時間を計算
         auto sa_start_time_point = chrono::high_resolution_clock::now();
         long long elapsed_ms_before_sa = chrono::duration_cast<chrono::milliseconds>(sa_start_time_point - start_time).count();
-        const long long TIME_LIMIT_MS = 1975;
+        const long long TIME_LIMIT_MS = 1970;
         long long remaining_ms = TIME_LIMIT_MS - elapsed_ms_before_sa;
 
         // ★ 改善案1: 上位3粒子のみを対象とする
@@ -888,112 +888,44 @@ int main() {
         }
     } // if (current_beam.empty()) ... else ... の終了
     
-    // --- 6. ★★★ 高度な座標圧縮と遷移規則の生成 (★置換ロジック★) ★★★
+    // --- 6. 色の割り当てと遷移規則の生成 (変更なし) ---
+    // この時点で best_solution には、全粒子でSAを行った後の最良解、
+    // またはフォールバック解が格納されている。
     
-    // この時点で best_solution には、最良解が格納されている。
-    
-    // 6.1. 「どのマスが」「どの状態で」「どう動くか」のマップを作成
-    //      (Pos -> {q -> {S, D}})
-    map<Pos, map<int, pair<int, char>>> rules_by_pos;
-    
-    // 6.2. 実際に使用する (色c, 状態q) -> (色A, 状態S, 方向D) のルールセットを作成
-    //      同時に、上記 rules_by_pos を構築する
-    set<tuple<int, int, int, int, char>> final_rules_by_color_id;
-    
-    // 6.3. 「動作(map<int, pair<int, char>>)」をキーとして、色IDをマッピングする
-    //      これが「座標圧縮」の核となる
-    map<map<int, pair<int, char>>, int> behavior_to_color_id;
-    int next_color_id = 1; // 色0 (未使用マス) 以外は 1 からスタート
-    
-    // 6.4. 最終的な (Pos -> 色ID) のマッピング
-    map<Pos, int> final_color_map;
+    int C_val = best_solution.total_C;
+    int Q_val = K;
 
-    
+    map<Pos, int> color_map;
+    int current_color = 1; 
+    for (const auto& cell : best_solution.path_cells) {
+        if (color_map.find(cell) == color_map.end()) {
+            color_map[cell] = current_color++;
+        }
+    }
+
+    vector<vector<int>> initial_board(N, vector<int>(N));
+    for (auto const& [pos, color] : color_map) {
+        initial_board[pos.first][pos.second] = color;
+    }
+
+    set<tuple<int, int, int, int, char>> rules;
     for (int k = 0; k < K - 1; ++k) {
         vector<Pos>& path = best_solution.paths_list[k];
         if (path.empty()) continue;
-        
         int current_q = k;
-        
         for (size_t p = 0; p < path.size() - 1; ++p) {
             Pos pos = path[p];
             Pos next_pos = path[p+1];
             
+            int c = color_map.count(pos) ? color_map[pos] : 0;
             char d = get_direction(pos, next_pos);
+            int A = c; 
             int S = (next_pos == TARGETS[k + 1]) ? k + 1 : k;
             
-            // このマス(pos)は、状態q=k の時に、{S, D} という動作をする
-            rules_by_pos[pos][current_q] = {S, d};
+            rules.insert({c, current_q, A, S, d});
         }
     }
-
-    // 6.5. 動作マップ(rules_by_pos)から色IDを決定し、最終的なルールを構築
-    int C_val = 1; // 色0（未使用）の分
-    int Q_val = K;
-
-    // 目的地マス (TARGETS[0]...TARGETS[K-1]) は、
-    // 経路の終点としてSが変わる可能性があるため、先に処理する
-    // (厳密には rules_by_pos に含まれる目的地マスだけでよい)
-    for (int k = 0; k < K; ++k) {
-        Pos pos = TARGETS[k];
-        // この目的地マスが、実際に何らかの経路で使用された場合
-        if (rules_by_pos.count(pos)) { 
-            auto behavior = rules_by_pos[pos];
-            
-            int color_id;
-            // この動作(behavior)パターンに初めて遭遇した場合
-            if (behavior_to_color_id.find(behavior) == behavior_to_color_id.end()) {
-                color_id = next_color_id++;
-                behavior_to_color_id[behavior] = color_id;
-                
-                // この新しい色ID (color_id) が行うべき動作を
-                // final_rules_by_color_id に登録する
-                for (auto const& [q, action] : behavior) {
-                    int S = action.first;
-                    char D = action.second;
-                    int A = color_id; // 色は変えない
-                    final_rules_by_color_id.insert({color_id, q, A, S, D});
-                }
-            } else {
-                // 既に登録済みの動作パターン
-                color_id = behavior_to_color_id[behavior];
-            }
-            
-            // このマス(Pos)には、この色IDを割り当てる
-            final_color_map[pos] = color_id;
-        }
-    }
-
-    // 目的地以外のマスを処理
-    for (auto const& [pos, behavior] : rules_by_pos) {
-        // 既に目的地として処理済みの場合はスキップ
-        if (final_color_map.count(pos)) continue; 
-        
-        int color_id;
-        if (behavior_to_color_id.find(behavior) == behavior_to_color_id.end()) {
-            color_id = next_color_id++;
-            behavior_to_color_id[behavior] = color_id;
-            
-            for (auto const& [q, action] : behavior) {
-                int S = action.first;
-                char D = action.second;
-                int A = color_id;
-                final_rules_by_color_id.insert({color_id, q, A, S, D});
-            }
-        } else {
-            color_id = behavior_to_color_id[behavior];
-        }
-        final_color_map[pos] = color_id;
-    }
-    
-    C_val = next_color_id; // 1 (色0) + (next_color_id - 1) (使った色)
-    int M_val = final_rules_by_color_id.size();
-
-    // 6.6. 初期盤面の生成
-    vector<vector<int>> initial_board(N, vector<int>(N, 0)); // 全て0で初期化
-    for (auto const& [pos, color] : final_color_map) {
-        initial_board[pos.first][pos.second] = color;
-    }
+    int M_val = rules.size();
 
 
     // --- 7. 出力 (変更なし) ---
@@ -1004,8 +936,7 @@ int main() {
         }
         cout << "\n";
     }
-    // ★ 6.5で作成した圧縮済みのルールセットを出力
-    for (const auto& rule : final_rules_by_color_id) { 
+    for (const auto& rule : rules) {
         cout << get<0>(rule) << " " << get<1>(rule) << " " 
              << get<2>(rule) << " " << get<3>(rule) << " " 
              << get<4>(rule) << "\n";
@@ -1015,7 +946,6 @@ int main() {
     auto duration = chrono::duration_cast<chrono::milliseconds>(end_time - start_time);
     cerr << "実行時間: " << duration.count() << " ms" << endl;
     cerr << "スコア (C+Q): " << (C_val + Q_val) << endl;
-    cerr << "圧縮後のC: " << C_val << ", Q: " << Q_val << endl;
     cerr << "BW: " << BEAM_WIDTH << ", NPPS: " << N_PATHS_PER_STATE << endl;
 
     return 0;
