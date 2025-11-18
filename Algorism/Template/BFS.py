@@ -1,6 +1,6 @@
 from collections import deque
 
-class GridBFS:
+class BFS:
     """
     グリッド上でのBFS（幅優先探索）を行うクラス
     S076.pyをクラス化したもの
