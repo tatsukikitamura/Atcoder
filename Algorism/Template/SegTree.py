@@ -56,13 +56,13 @@ class SegTree:
         l += self.num
         r += self.num
         while l < r:
-            if l & 1:
+            if l % 2:
                 res = self.segfunc(res, self.tree[l])
                 l += 1
             if r & 1:
                 res = self.segfunc(res, self.tree[r - 1])
-            l >>= 1
-            r >>= 1
+            l = l // 2
+            r = r // 2
         return res
 
 
