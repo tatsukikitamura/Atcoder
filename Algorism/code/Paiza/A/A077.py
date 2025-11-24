@@ -1,14 +1,4 @@
 class Node:
-    """
-
-    区画の情報を管理
-
-    Attributes:
-        row (int): 区画の行番号（0-indexed）
-        col (int): 区画の列番号（0-indexed）
-        nears (list): 隣接リスト
-        arrival (bool): 探索フラグ
-    """
     def __init__(self, row, col):
         self.row = row
         self.col = col
@@ -22,31 +12,48 @@ for _ in range(N):
     LIST.append(list(map(int,input().split())))
 
 def check(x:list,y:list):
-    if (x[0]-y[0])**2 + (x[1]-y[1])**2 <= 2*R**2:
+    if ((x[0]-y[0])**2 + (x[1]-y[1])**2 <= 4*R**2) and x != y:
         return True
     else:
         return False
 
-stack = []
+
 nodes = []
 
 for x in range(N):
     nodes.append(Node(LIST[x][0],LIST[x][1]))
 
-stack.append(nodes[0])
+stack = []
 
-
-print(LIST)
-
-node = stack.pop()
-print(node)
 for node in nodes:
     for x in range(N):
-        print(node.row,nodes[x].row,node.col,nodes[x].col)
-        if node.row == nodes[x].row and node.col == nodes[x].col:
-            continue
-        elif check([node.row,node.col],LIST[x]):
-            node.nears.append(nodes[x])
+        if check([node.row,node.col],LIST[x]):
+            node.nears.append(LIST[x])
 
-print(nodes)
+already_used = []
         
+
+stack.append([nodes[0].row,nodes[0].col])
+
+
+count = 1
+while LIST != []:
+    if stack == []:
+        stack.append(LIST[0])
+        count += 1
+    use = stack.pop(0)
+    already_used.append(use)
+    
+    LIST.remove(use)
+    for node in nodes:
+        if node.row == use[0] and node.col == use[1]:
+            for near in node.nears:
+                if near not in already_used and near not in stack:
+                    stack.append(near)
+            break
+   
+    
+
+print(count)
+
+
