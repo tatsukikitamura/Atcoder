@@ -1,50 +1,60 @@
-n,k = map(int,input().split())
-s = str(input())
-s_list = list(s)
+import copy 
+
+class Node:
+    """
+    ノード情報の管理
+    Attributes:
+        index (int): ノード番号
+        nears (list): 隣接リスト（隣接するノード番号を格納）
+        arrival (bool): 探索済フラグ（到達済の場合Trueが返される）
+    """
+    def __init__(self, height, width, depth):
+        self.height = height
+        self.width = width
+        self.depth = depth
+        self.nears = []
+    def __repr__(self):
+        return f"(H:{self.height}, W:{self.width}, D:{self.depth}, nears_count:{len(self.nears)})"
 
 
-def first_solve(n,s):
-    for x in range(n):
-        if s[x] != ".":
-            return False
-    return True
+N = int(input())
 
-if first_solve(n,s):
-    print(n)
-    exit()
+nodes = []
 
-if k == 1:
-    use = []
-    for x in range(n-2):
-        count = 0
-        for y in range(3):
-            if s[x+y] == "S":
-                count += 1
-        use.append(count)
-    index = use.index(max(use))
-    for y in range(3):
-        s_list[index+y] = "."
-    count2 = 0
-    for x in range(n):
-        if s_list[x] == ".":
-            count2 += 1
-    print(count2)
-    exit()
-            
-if k == 2:
-    max_count = 0
-    for i in range(n-2):
-        for j in range(n-2):
-            temp_list = list(s)
-            for y in range(3):
-                temp_list[i+y] = "."
-            for y in range(3):
-                temp_list[j+y] = "."
-  
-            count = 0
-            for x in range(n):
-                if temp_list[x] == ".":
-                    count += 1
-            max_count = max(max_count, count)
-    print(max_count)
+for _ in range(N):
+    H,W,D = map(int,input().split())
+    nodes.append(Node(H,W,D))
 
+for i in range(N):
+    for j in range(N):
+        if i != j:
+            node = nodes[i]
+            other_node = nodes[j]
+           
+            if node.width >= other_node.width and node.depth >= other_node.depth:
+                       node.nears.append(other_node)
+
+
+ans = 0
+
+for x in range(N):
+    use_nodes = copy.deepcopy(nodes)
+    
+    stack = [(use_nodes[x], use_nodes[x].height)] 
+    max_ans_for_path = use_nodes[x].height 
+    
+    
+    while stack:
+        print(stack)
+        node, current_height = stack.pop()
+ 
+        max_ans_for_path = max(max_ans_for_path, current_height)
+        
+        if node.nears:
+            for near_node in node.nears:
+                new_height = current_height + near_node.height
+                stack.append((near_node, new_height))
+
+    ans = max(ans, max_ans_for_path)
+
+print(ans)
