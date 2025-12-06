@@ -9,4 +9,10 @@
 /test-results-*/
 /test-results-*/
 /Heuristic/AHC056/binary
-*.tempCodeRunnerFile.py
+tempCodeRunnerFile*
+__pycache__/
+*.out
+*.exe
+/Algorithm/code/job 
+
+

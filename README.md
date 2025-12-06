@@ -2,7 +2,7 @@ Atcoderのコードを残し用
 
 ## ディレクトリ構造
 
-### Algorism/
+### Algorithm/
 競技プログラミングのアルゴリズム問題の解答コード
 
 - **code/Atcoder/** - AtCoderの問題解答
