@@ -3,7 +3,6 @@ from collections import deque, defaultdict
 input = sys.stdin.readline
 def main():
     H, W = map(int, input().split())
-    grid = []
     warp_dict = defaultdict(list)
     start_pos = (0, 0)
     goal_pos = (H - 1, W - 1)
@@ -19,12 +18,6 @@ def main():
     while queue:
         r, c = queue.popleft()
         if (r, c) == goal_pos:
-            print(dist[r][c])
-            print(dist)
-            print(warp_dict)
-            print(queue)
-            print(grid)
-            print("--------------------------------")
             return
         current_char = grid[r][c]
         for dr, dc in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
