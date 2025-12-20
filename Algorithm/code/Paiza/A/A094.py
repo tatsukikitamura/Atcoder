@@ -1,17 +1,20 @@
 import math
+import heapq
 
 N,M = map(int,input().split())
-route_list =[[0]*N]*N
+route_list = [[0] * N for i in range(N)]
+
 print(route_list)
 for _ in range(M):
     u,v,c = map(int,input().split())
     route_list[u-1][v-1] = c
-    
-node_num = len(route_list) #ノードの数
 
-unsearched_nodes = list(range(node_num)) # 未探索ノード
-distance = [math.inf] * node_num # ノードごとの距離のリスト
-previous_nodes = [-1] * node_num # 最短経路でそのノードのひとつ前に到達するノードのリスト
+
+node_num = N
+
+unsearched_nodes = list(range(node_num)) 
+distance = [math.inf] * node_num 
+previous_nodes = [-1] * node_num 
 distance[0] = 0 # 初期のノードの距離は0とする
 
 def get_target_min_index(min_index, distance, unsearched_nodes):
@@ -42,6 +45,8 @@ while(len(unsearched_nodes) != 0):
 
 # 以下で結果の表示
 
+
+
 print("-----経路-----")
 previous_node = node_num - 1
 while previous_node != -1:
@@ -52,4 +57,4 @@ while previous_node != -1:
     previous_node = previous_nodes[previous_node]
 
 print("-----距離-----")
-print(distance[node_num - 1])
+print(distance)
