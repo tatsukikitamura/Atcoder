@@ -1,24 +1,30 @@
-N = int(input())
-a_list = list(map(int,input().split()))
-domino = [0] * N
+T = int(input())
 
-for x in range(N):
-    if a_list[x] == 1:
-        continue
-    domino[x] += 1
-    if x+a_list[x] < N:
-        domino[x+a_list[x]-1] -= 1
-    else:
-        domino[N-1] -= 1
-#print(domino)
+for _ in range(T):
+    sum = 0
+    w = []
+    p = []
+    N= int(input()) # ナップサックの許容量
+    for _ in range(N):
+        W,P = map(int,input().split())
+        w.append(W)
+        p.append(P)
+        sum += W
+    W = sum // 2
 
-count = 0
-ans = N
-for x in range(N):
-    count += domino[x]
-    if count == 0:
-        ans = x+1
-        break
+    dp = [[[0,0] for x in range(W+1)] for i in range(N+1)] # DPの配列作成
+
+    for i in range(N):
+        for j in range(W+1):
+            if j < w[i]: # この時点では許容量を超えていないので選択しない
+                dp[i+1][j][0] = dp[i][j][0] # ただ選択はしていないが、今回の情報をそのままi+1の方へ移す
+                dp[i+1][j][1] += 1# ただ選択はしていないが、今回の情報をそのままi+1の方へ移す
+            else:
+                dp[i+1][j][0] = max(dp[i][j][0], dp[i][j-w[i]][0]+p[i])
+                dp[i+1][j][1] += 1
+    
+    print(N-dp[N][W][1])
 
 
-print(ans)
+
+
