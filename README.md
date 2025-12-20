@@ -8,14 +8,7 @@ Atcoderのコードを残し用
 - **code/Atcoder/** - AtCoderの問題解答
   - ABC407/, ABC408/, ABC409/, ABC412/, ABC417/, ABC421/, ABC425/, ABC429/, ABC430/, ABC431/, ABC432/
   - 各コンテストごとに問題別のPython/C++ファイル
-
-- **code/job/** - 就職活動関連のコーディングテスト
-  - donuts/ - donuts
-  - GENIEE/ - GENIEE関連
-  - LINE/ - LINE関連
-  - m3/ - m3関連
-  - TEAMLABコーディングテスト/ - TEAMLAB関連
-
+    
 - **code/Paiza/** - Paizaの問題解答
   - A/ - Aランク問題
   - B/ - Bランク問題
