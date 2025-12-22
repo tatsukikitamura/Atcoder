@@ -1,38 +1,34 @@
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-#include <math.h>
-#include <time.h>
-#include <ctype.h>
-#include <limits.h>
-#include <float.h>
-#include <stdbool.h>
-#include <stdarg.h>
-#include <stddef.h>
-#include <stdint.h>
-#include <stdnoreturn.h>
 
-int print_file(const char *filename) 
-{
-    FILE *fp;
-    char buf[1000];
+void safegets(char *head, int size, const char *prompt) {
+    *head = '\0';
+    printf("%s", prompt);
+    if (fgets(head, size, stdin) == NULL) return;
 
-    fp = fopen(filename, "r");
-    if (fp == NULL) {
-        printf("ファイルを開けませんでした\n");
-        return 1;
+    if (head[strlen(head) - 1] == '\n') {
+        head[strlen(head) - 1] = '\0';
     }
-
-    while (fgets(buf, sizeof(buf), fp) != NULL) {
-    printf("%s", buf);
+    if (strlen(head) == size - 1) {
+        printf("Input is too long\n");
     }
-    fclose(fp);
-    return 0;
 }
 
 
-
 int main() {
-    print_file("prog30.c");
+    char moto[100], gyaku[100];
+    safegets(moto, sizeof(moto),"入力内容：\n");
+    for (int i = strlen(moto)-3,j = 0; i >= 0; i-=3, j +=3) {
+        gyaku[j] = moto[i];
+        gyaku[j+1] = moto[i+1];
+        gyaku[j+2] = moto[i+2];
+    }
+    gyaku[strlen(moto)] = '\0';
+    puts(gyaku);
+    if (strcmp(moto, gyaku) == 0) {
+        puts("回文です\n");
+    } else {
+        puts("回文ではありません\n");
+    }
     return 0;
 }
