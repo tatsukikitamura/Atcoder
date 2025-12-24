@@ -17,3 +17,8 @@ __pycache__/
 .DS_Store
 .clangd
 /venv/
+*in
+tools*/
+main*
+solver
+a.out
