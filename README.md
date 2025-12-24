@@ -1,36 +1,23 @@
-Atcoderのコードを残し用
+# AtCoder
 
-## ディレクトリ構造
+This repository contains code for AtCoder contests, including Algorithm and Heuristic problems.
 
-### Algorithm/
-競技プログラミングのアルゴリズム問題の解答コード
+## Algorithm
 
-- **code/Atcoder/** - AtCoderの問題解答
-  - ABC407/, ABC408/, ABC409/, ABC412/, ABC417/, ABC421/, ABC425/, ABC429/, ABC430/, ABC431/, ABC432/
-  - 各コンテストごとに問題別のPython/C++ファイル
-    
-- **code/Paiza/** - Paizaの問題解答
-  - A/ - Aランク問題
-  - B/ - Bランク問題
-  - C/ - Cランク問題
-  - S/ - Sランク問題
+Contains algorithm-related code.
 
-- **code/勉強用/** - 勉強用コード（1031.py, example.py）
+- **[Template](Algorithm/Template)**: Library and template code for competitive programming.
+- **[code](Algorithm/code)**: Solutions for various algorithm problems.
 
-- **code/大学課題/** - 大学課題
+## Heuristic
 
+Contains solutions for AtCoder Heuristic Contests (AHC).
 
-- **Template/** - テンプレートコード
-  - BFS.py - 幅優先探索のテンプレート
-
-### Heuristic/
-ヒューリスティックコンテスト関連のコード
-
-- **AHC001/** - 
-- **AHC048/** - 
-- **AHC050/** - 
-- **AHC051/** - 
-- **AHC056/** - 
-  - approach/ -
-  - compare_scores.py - スコア比較用スクリプト
-  - test/ - テストケース
+- **[AHC001](Heuristic/AHC001)**
+- **[AHC048](Heuristic/AHC048)**
+- **[AHC050](Heuristic/AHC050)**
+- **[AHC051](Heuristic/AHC051)**
+- **[ahc055](Heuristic/ahc055)**
+- **[AHC056](Heuristic/AHC056)**
+- **[AHC057](Heuristic/AHC057)**
+- **[ahc058](Heuristic/ahc058)**
