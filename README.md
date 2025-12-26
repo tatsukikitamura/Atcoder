@@ -1,23 +1,24 @@
-# AtCoder
+# AtCoder Solutions
 
-This repository contains code for AtCoder contests, including Algorithm and Heuristic problems.
+This repository hosts my solutions and library code for AtCoder contests, focused on high-performance C++ implementations.
 
-## Algorithm
+## 📂 Repository Structure
 
-Contains algorithm-related code.
+- **Algorithm**: Solutions for ABC/ARC/AGC and a comprehensive C++ library.
+- **Heuristic**: Specialized environments for AtCoder Heuristic Contests (AHC).
 
-- **[Template](Algorithm/Template)**: Library and template code for competitive programming.
-- **[code](Algorithm/code)**: Solutions for various algorithm problems.
+## 🛠 Environment & Standards
 
-## Heuristic
+- **Language**: C++23
+- **Compiler**: GCC with `-O2 -Wall`
+- **Scripting**: Python 3.x (for local testing and parameter tuning)
+- **Infrastructure**: Custom Makefiles for build automation and test execution.
 
-Contains solutions for AtCoder Heuristic Contests (AHC).
+## 🚀 Heuristic Contest Workflow
 
-- **[AHC001](Heuristic/AHC001)**
-- **[AHC048](Heuristic/AHC048)**
-- **[AHC050](Heuristic/AHC050)**
-- **[AHC051](Heuristic/AHC051)**
-- **[ahc055](Heuristic/ahc055)**
-- **[AHC056](Heuristic/AHC056)**
-- **[AHC057](Heuristic/AHC057)**
-- **[ahc058](Heuristic/ahc058)**
+Each AHC project follows a strict directory structure to ensure reproducibility and efficiency:
+
+- **`src/`**: C++ source code (no headers included via bits/stdc++.h).
+- **`tools/`**: Official Rust visualizers and scorers.
+- **`scripts/`**: Python scripts for parallel testing and Optuna hyperparameter optimization.
+

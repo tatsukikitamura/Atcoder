@@ -16,7 +16,7 @@ import uuid
 import tempfile
 
 # Paths
-CPP_SOURCE = PROJECT_ROOT / "src" / "experimental" / "v1.cpp"
+CPP_SOURCE = PROJECT_ROOT / "src" / "main.cpp"
 EXECUTABLE = PROJECT_ROOT / "build" / "optimizer_bin"
 INPUT_DIR = PROJECT_ROOT / "testcases" / "in"
 VIS_BINARY = PROJECT_ROOT / "tools" / "target" / "release" / "vis"
@@ -24,7 +24,7 @@ VIS_BINARY = PROJECT_ROOT / "tools" / "target" / "release" / "vis"
 def compile_solver():
     print("Compiling solver...")
     # Compile C++ solver
-    cmd = ["g++", "-O3", "-std=c++17", str(CPP_SOURCE), "-o", str(EXECUTABLE)]
+    cmd = ["g++", "-O3", "-std=c++23", str(CPP_SOURCE), "-o", str(EXECUTABLE)]
     subprocess.run(cmd, check=True)
     
     # Check if visualizer exists
