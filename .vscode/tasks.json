@@ -4,15 +4,7 @@
         {
             "label": "C++: コンパイル & 実行",
             "type": "shell",
-            "command": "g++",
-            "args": [
-                "-std=c++17",
-                "-O2",
-                "-Wall",
-                "-o",
-                "${fileDirname}/${fileBasenameNoExtension}",
-                "${file}"
-            ],
+            "command": "g++ -std=c++23 -O2 -Wall -o \"${fileDirname}/${fileBasenameNoExtension}\" \"${file}\" && \"${fileDirname}/${fileBasenameNoExtension}\"",
             "group": {
                 "kind": "build",
                 "isDefault": true
@@ -25,14 +17,25 @@
                 "showReuseMessage": true,
                 "clear": false
             },
-            "problemMatcher": ["$gcc"]
+            "problemMatcher": {
+                "owner": "cpp",
+                "fileLocation": ["relative", "${workspaceFolder}"],
+                "pattern": {
+                    "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+                    "file": 1,
+                    "line": 2,
+                    "column": 3,
+                    "severity": 4,
+                    "message": 5
+                }
+            }
         },
         {
             "label": "C++: コンパイルのみ",
             "type": "shell",
             "command": "g++",
             "args": [
-                "-std=c++17",
+                "-std=c++23",
                 "-O2",
                 "-Wall",
                 "-o",
@@ -46,7 +49,18 @@
                 "focus": false,
                 "panel": "shared"
             },
-            "problemMatcher": ["$gcc"]
+            "problemMatcher": {
+                "owner": "cpp",
+                "fileLocation": ["relative", "${workspaceFolder}"],
+                "pattern": {
+                    "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+                    "file": 1,
+                    "line": 2,
+                    "column": 3,
+                    "severity": 4,
+                    "message": 5
+                }
+            }
         }
     ]
 }

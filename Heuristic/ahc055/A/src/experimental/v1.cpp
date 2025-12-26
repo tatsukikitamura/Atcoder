@@ -13,27 +13,21 @@
 #include <unordered_set>
 #include <climits>
 #include <cstring>
-#include <queue>
-#include <functional>
 
 using namespace std;
 
 // Bitset optimization version of baseline (1.cpp)
 
 namespace Config {
-    const double TIME_LIMIT = 1.97;
-    const double T_START = 150.0;
-    const double T_END = 0.01;
-    const int INITIAL_SEED_COUNT = 100;
-    const int BEAM_WIDTH = 50;
-    const bool USE_BEAM_SEARCH = true;
-    double PROB_SWAP = 0.057;
-    double PROB_INSERT_FRONT = 0.379;
-    const int SORT_EVAL_WIDTH = 20;
-    
-    // Chokudai Search Config
-    const double CHOKUDAI_TIME_LIMIT = 0.8; // Allocate significant time
-    const int CHOKUDAI_MAX_WIDTH = 5000; // Max states per depth in PQ
+    double TIME_LIMIT = 1.97;
+    double T_START = 150.0;
+    double T_END = 0.01;
+    int INITIAL_SEED_COUNT = 100;
+    int BEAM_WIDTH = 50;
+    bool USE_BEAM_SEARCH = true;
+    double PROB_SWAP = 0.6;
+    double PROB_INSERT_FRONT = 0.25;
+    int SORT_EVAL_WIDTH = 20;
 }
 
 int N;
@@ -157,46 +151,32 @@ long long simulate_full(const vector<int>& order, vector<int>& dur_out) {
         
         // Find efficient weapons using bitsets
         // Iterate groups descending by damage
-        // Efficient Overkill Prevention Strategy
-        while (rem > 0) {
-            int chosend_w = -1;
-            int chosen_d = -1;
-            int strongest_w = -1;
-            int strongest_d = -1;
-            int ssd_w = -1;
-            int ssd_d = -1;
+        for (const auto& group : weapon_groups[box]) {
+            if (rem <= 0) break;
             
-            // Iterate groups descending by damage
-            for (const auto& group : weapon_groups[box]) {
-                Bitset256 candidates = group.mask & unlocked_mask & dur_mask;
-                if (candidates.none()) continue;
-                
+            Bitset256 candidates = group.mask & unlocked_mask & dur_mask;
+            
+            // While there are candidates in this damage group
+            while (!candidates.none() && rem > 0) {
                 int w = candidates.first_set();
                 
-                if (strongest_w == -1) {
-                    strongest_w = w;
-                    strongest_d = group.dmg;
-                }
+                int use = min((long long)dur[w], (rem + group.dmg - 1) / group.dmg);
+                total += use;
+                rem -= (long long)use * group.dmg;
+                dur[w] -= use;
                 
-                if (group.dmg >= rem) {
-                    ssd_w = w;
-                    ssd_d = group.dmg;
+                if (dur[w] == 0) {
+                    dur_mask.reset(w);
+                    candidates.reset(w); // Removing from local candidates too
                 } else {
-                    break;
+                    // Used partially but still has durability
+                    // We must break if we don't want to use same weapon again?
+                    // No, greedy logic says keep using best weapon until exhausted or rem==0.
+                    // But here 'use' calculation assumes we use IT until exhausted or rem==0.
+                    // So we are done with this step for this weapon or this box.
+                    break; 
                 }
             }
-            
-            if (ssd_w != -1) { chosend_w = ssd_w; chosen_d = ssd_d; }
-            else { chosend_w = strongest_w; chosen_d = strongest_d; }
-            
-            if (chosend_w == -1) break;
-            
-            int use = min((long long)dur[chosend_w], (rem + chosen_d - 1) / chosen_d);
-            total += use;
-            rem -= (long long)use * chosen_d;
-            dur[chosend_w] -= use;
-            
-            if (dur[chosend_w] == 0) dur_mask.reset(chosend_w);
         }
         
         if (rem > 0) total += rem;
@@ -370,102 +350,116 @@ struct BeamState {
     }
 };
 
-
-// --- Chokudai Search ---
-
-// Using existing BeamNode and BeamState structs
-
-void chokudai_search(vector<int>& best_order_out) {
-    auto root = make_shared<BeamNode>(nullopt, 0);
-    BeamState initial_state;
-    initial_state.node = root;
-    
-    // Priority queues for each depth
-    // We want to pop the state with minimum score.
-    // However, BeamState is large. We should store shared_ptr<BeamState> or just BeamState?
-    // BeamState is ~270 bytes. It's fine to store by value.
-    
-    struct StateWrapper {
-        BeamState state;
-        bool operator>(const StateWrapper& other) const {
-            return state.score > other.state.score;
+void collect_candidates(
+    BeamState& state,
+    vector<Candidate>& candidates,
+    int target_depth
+) {
+    if (state.depth == target_depth) {
+        for (int next_box = 0; next_box < N; ++next_box) {
+            if (state.used_mask.test(next_box)) continue;
+            long long next_score = state.try_next(next_box);
+            candidates.push_back({next_box, state.node, next_score});
         }
-    };
+        return;
+    }
     
-    vector<priority_queue<StateWrapper, vector<StateWrapper>, greater<StateWrapper>>> queues(N + 1);
+    auto& children = state.node->children;
+    children.erase(
+        remove_if(children.begin(), children.end(),
+            [](const pair<int, weak_ptr<BeamNode>>& p) {
+                return p.second.expired();
+            }),
+        children.end()
+    );
     
-    queues[0].push({initial_state});
+    auto current_node = state.node;
     
-    Timer timer;
-    long long best_score_found = LLONG_MAX;
-    
-    while (timer.elapsed() < Config::CHOKUDAI_TIME_LIMIT) {
-        bool updated = false;
+    for (const auto& [box, weak_child] : children) {
+        auto child = weak_child.lock();
+        if (!child) continue;
         
-        for (int d = 0; d < N; ++d) {
-            if (queues[d].empty()) continue;
-            
-            // Pop the best state
-            // In pure Chokudai Search, we might want to expand just one.
-            // But if we have many "beams" (width), we can expand up to width?
-            // "Chokudai Search" typically iterates d=0..N-1, expands 1 best from each depth that hasn't been expanded (or just best in PQ).
-            
-            // Limit checks
-            // If we have too many states at d+1, we might skip?
-            // But standard behavior is just PQ.
-            
-            StateWrapper wrapper = queues[d].top();
-            queues[d].pop();
-            updated = true;
-            
-            BeamState& state = wrapper.state;
-            
-            // Expand
-            // Find all valid next boxes
-            // Similar to collect_candidates logic but inline
-            
-            for (int next_box = 0; next_box < N; ++next_box) {
-                if (state.used_mask.test(next_box)) continue;
-                
-                // Calculate next score
-                // We need to apply the move to get new state
-                // BeamState::apply modifies state. So we need a copy.
-                
-                BeamState next_state = state;
-                auto backup = next_state.apply(next_box); 
-                // Wait, apply() modifies 'score' and 'dur'. 
-                // And adds to used_mask.
-                
-                // Link new node
-                 auto child = make_shared<BeamNode>(
-                    make_pair(next_box, state.node), next_state.score
-                );
-                state.node->children.emplace_back(next_box, weak_ptr<BeamNode>(child));
-                next_state.node = child;
-                
-                if (next_state.depth == N) {
-                   if (next_state.score < best_score_found) {
-                       best_score_found = next_state.score;
-                       // Reconstruct order
-                       vector<int> order;
-                       auto curr = child;
-                        while (curr && curr->parent.has_value()) {
-                            order.push_back(curr->parent->first);
-                            curr = curr->parent->second;
-                        }
-                        reverse(order.begin(), order.end());
-                        best_order_out = order;
-                   }
-                } else {
-                    if (queues[d+1].size() < Config::CHOKUDAI_MAX_WIDTH) {
-                        queues[d+1].push({next_state});
-                    }
-                }
+        state.node = child;
+        auto backup = state.apply(box);
+        
+        collect_candidates(state, candidates, target_depth);
+        
+        state.restore(box, backup);
+        state.node = current_node;
+    }
+}
+
+vector<int> beam_search() {
+    auto root = make_shared<BeamNode>(nullopt, 0);
+    
+    BeamState state;
+    state.node = root;
+    
+    vector<shared_ptr<BeamNode>> current_leaves{root};
+    
+    for (int step = 0; step < N; ++step) {
+        vector<Candidate> candidates;
+        candidates.reserve(current_leaves.size() * (N - step));
+        collect_candidates(state, candidates, step);
+        
+        if (candidates.empty()) break;
+        
+        int keep = min(Config::BEAM_WIDTH, (int)candidates.size());
+        
+        if ((int)candidates.size() > keep) {
+            nth_element(candidates.begin(), candidates.begin() + keep, candidates.end(),
+                [](const Candidate& a, const Candidate& b) {
+                    return a.score < b.score;
+                });
+            candidates.resize(keep);
+        }
+        
+        current_leaves.clear();
+        
+        for (const auto& [next_box, parent, score] : candidates) {
+            auto child = make_shared<BeamNode>(
+                make_pair(next_box, parent), score
+            );
+            parent->children.emplace_back(next_box, weak_ptr<BeamNode>(child));
+            current_leaves.push_back(child);
+        }
+        
+        if (current_leaves.empty()) break;
+    }
+    
+    shared_ptr<BeamNode> best = nullptr;
+    long long best_score = LLONG_MAX;
+    
+    for (const auto& leaf : current_leaves) {
+        if (leaf->score < best_score) {
+            best_score = leaf->score;
+            best = leaf;
+        }
+    }
+    
+    vector<int> order;
+    if (best) {
+        auto curr = best;
+        while (curr && curr->parent.has_value()) {
+            order.push_back(curr->parent->first);
+            curr = curr->parent->second;
+        }
+        reverse(order.begin(), order.end());
+    }
+    
+    if ((int)order.size() < N) {
+        vector<bool> used(N, false);
+        for (int box : order) {
+            used[box] = true;
+        }
+        for (int i = 0; i < N; ++i) {
+            if (!used[i]) {
+                order.push_back(i);
             }
         }
-        
-        if (!updated) break; // All queues empty? Should not happen if time allows and we have paths.
     }
+    
+    return order;
 }
 
 void output_result(const vector<int>& order) {
@@ -514,12 +508,14 @@ void output_result(const vector<int>& order) {
 }
 
 int main(int argc, char* argv[]) {
-    if (argc >= 3) {
-        Config::PROB_SWAP = stod(argv[1]);
-        Config::PROB_INSERT_FRONT = stod(argv[2]);
-    }
     ios_base::sync_with_stdio(false);
     cin.tie(NULL);
+
+    if (argc > 1) Config::PROB_SWAP = stod(argv[1]);
+    if (argc > 2) Config::PROB_INSERT_FRONT = stod(argv[2]);
+    
+    // cerr << "Using params: SWAP=" << Config::PROB_SWAP << ", INSERT=" << Config::PROB_INSERT_FRONT << endl;
+
     
     Timer timer;
     
@@ -564,16 +560,13 @@ int main(int argc, char* argv[]) {
     long long best_score = score;
     
     if (Config::USE_BEAM_SEARCH) {
-        vector<int> beam_order;
-        chokudai_search(beam_order);
-        if (!beam_order.empty()) {
-             long long beam_score = simulate_full(beam_order, dummy_dur);
-             if (beam_score < best_score) {
-                 best_score = beam_score;
-                 best_order = beam_order;
-                 order = beam_order;
-                 score = beam_score;
-             }
+        vector<int> beam_order = beam_search();
+        long long beam_score = simulate_full(beam_order, dummy_dur);
+        if (beam_score < best_score) {
+            best_score = beam_score;
+            best_order = beam_order;
+            order = beam_order;
+            score = beam_score;
         }
     }
     
@@ -647,7 +640,7 @@ int main(int argc, char* argv[]) {
         if (elapsed > Config::TIME_LIMIT) break;
         
         double progress = elapsed / Config::TIME_LIMIT;
-        double T = Config::T_START * pow(Config::T_END / Config::T_START, progress);
+        double T = Config::T_END + (Config::T_START - Config::T_END) * (1.0 - progress);
         
         double r = dist01(rng);
         

@@ -19,6 +19,5 @@ __pycache__/
 /venv/
 *in
 tools*/
-
 solver
 a.out

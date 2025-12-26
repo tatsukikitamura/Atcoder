@@ -15,7 +15,7 @@
     "editor.formatOnSave": false
   },
   "code-runner.executorMap": {
-    "cpp": "cd $dir && g++ -std=c++17 -O2 -Wall -o $fileNameWithoutExt $fileName && ./$fileNameWithoutExt"
+    "cpp": "cd $dir && g++ -std=c++23 -O2 -Wall -o $fileNameWithoutExt $fileName && ./$fileNameWithoutExt"
   },
   "code-runner.runInTerminal": true,
   "code-runner.clearPreviousOutput": true
