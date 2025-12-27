@@ -22,28 +22,19 @@ When the user asks to setup a new Heuristic contest workspace (e.g., "Setup work
 
 2.  **Create Configuration Files**
     
+
     **`Makefile`**
-    Create a Makefile with the following standard targets:
-    - `all`: Build `src/main.cpp` to `build/main`
-    - `vis`: Run with visualizer (`cargo run --bin vis`)
-    - `gen`: Generate testcases (`cargo run --bin gen`)
-    - `test`: Run comparison scripts
-    - `clean`: Remove build artifacts
+    Copy the standard Makefile template:
+    `cp /Users/kitamuratatuki/Atcoder/.agent/templates/heuristic/Makefile Heuristic/<ContestName>/A/Makefile`
 
     **`.gitignore`**
-    ```gitignore
-    build/
-    *.o
-    tmp/
-    testcases/in/
-    tools/target/
-    __pycache__/
-    ```
+    Copy the standard gitignore template:
+    `cp /Users/kitamuratatuki/Atcoder/.agent/templates/heuristic/.gitignore Heuristic/<ContestName>/A/.gitignore`
 
 3.  **Setup Scripts**
-    Create standard Python/Shell scripts in `scripts/`:
-    - `optimize_params.py`: Template for Optuna optimization using official `vis` tool.
-    - `compare.sh`: Script to run and compare solvers.
+    Copy standard Python/Shell scripts to `scripts/`:
+    - `cp /Users/kitamuratatuki/Atcoder/.agent/templates/heuristic/optimize_params.py Heuristic/<ContestName>/A/scripts/`
+    - `cp /Users/kitamuratatuki/Atcoder/.agent/templates/heuristic/compare.sh Heuristic/<ContestName>/A/scripts/`
 
 4.  **Official Tools**
     Remind the user to download the official tools (Rust) from the contest page and place them in the `tools/` directory.
