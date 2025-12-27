@@ -21,3 +21,6 @@ __pycache__/
 tools*/
 solver
 a.out
+build
+tmp
+testcases
