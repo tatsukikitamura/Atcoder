@@ -25,7 +25,3 @@ When working on this project, please adhere to the following guidelines.
 ### Python
 - Use the shared virtual environment: `source /Users/kitamuratatuki/Atcoder/venv/bin/activate`
 - Follow PEP 8 style where reasonable.
-
-## Workflow Templates
-- When setting up a new contest environment, copy templates from `.agent/templates/`.
-- Refer to `.agent/workflows/` for complex setup procedures.

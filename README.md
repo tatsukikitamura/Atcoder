@@ -22,3 +22,6 @@ Each AHC project follows a strict directory structure to ensure reproducibility 
 - **`tools/`**: Official Rust visualizers and scorers.
 - **`scripts/`**: Python scripts for parallel testing and Optuna hyperparameter optimization.
 
+
+## 🤖 AI Agent Guidelines
+Please refer to [.agent/instructions.md](.agent/instructions.md) for detailed coding standards, workflow templates, and specialized knowledge references (e.g., Simulated Annealing guides).
