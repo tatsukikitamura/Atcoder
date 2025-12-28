@@ -1,7 +1,10 @@
-
+#if 0 and !defined(__clang__)
+#include <vector>
+#pragma GCC target("avx2,bmi,bmi2,lzcnt,popcnt")
+#pragma GCC optimize("Ofast")
+#endif
 #include <stdio.h>
 #include <unistd.h>
-
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -14,6 +17,8 @@
 #include <string>
 #include <type_traits>
 #include <vector>
+
+
 
 namespace tatsuki {
 
@@ -427,6 +432,8 @@ inline std::array<unsigned long long, 20> Printer::tens = [] {
 #include <random>
 #include <utility>
 
+
+
 namespace tatsuki {
 
 using i8 = int8_t;
@@ -447,6 +454,9 @@ using f64 = double;
 
 namespace tatsuki {
 
+
+
+// https://github.com/wangyi-fudan/wyhash
 struct WYRand {
   public:
     using result_type = u64;
@@ -479,6 +489,7 @@ concept random_64 = std::uniform_random_bit_generator<G> &&
 
 namespace internal {
 
+// random choice from [0, upper]
 template <random_64 G> u64 uniform_u64(u64 upper, G& gen) {
     if (upper == 0) return 0;
     u64 mask = (std::bit_floor(upper) << 1) - 1;
@@ -488,6 +499,7 @@ template <random_64 G> u64 uniform_u64(u64 upper, G& gen) {
     }
 }
 
+// random choice from [0, upper], faster than uniform_u64
 template <random_64 G> u64 random_u64(u64 upper, G& gen) {
     return (u64)(((u128)(upper) + 1) * gen() >> 64);
 }
@@ -526,6 +538,7 @@ template <class T> T random(T lower, T upper) {
 template <random_64 G> bool uniform_bool(G& gen) { return gen() & 1; }
 inline bool uniform_bool() { return uniform_bool(global_gen()); }
 
+// select 2 elements from [lower, uppper]
 template <class T, random_64 G>
 std::pair<T, T> uniform_pair(T lower, T upper, G& gen) {
     assert(upper - lower >= 1);
@@ -541,6 +554,7 @@ template <class T> std::pair<T, T> uniform_pair(T lower, T upper) {
     return uniform_pair(lower, upper, global_gen());
 }
 
+// random 0.0 <= X < 1.0
 template <class G> inline double random_01(G& gen) {
     constexpr double inv = 1.0 / ((double)(u64(1) << 63) * 2);
     return double(gen()) * inv;
@@ -567,6 +581,7 @@ struct StopWatch {
 
 }  // namespace tatsuki
 
+
 namespace tatsuki {
 using std::countr_zero;
 
@@ -588,8 +603,10 @@ int countr_zero(T x) {
 
 #include <numeric>
 
+
 namespace tatsuki {
 
+// sign
 template <class T>
     requires std::is_integral_v<T>
 int sgn(T x) {
@@ -600,6 +617,7 @@ inline int sgn(__int128 x) {
     if (x == 0) return 0;
     return x > 0 ? 1 : -1;
 }
+// for custom class
 template <class T>
     requires requires(T x) {
         { x.sgn() } -> std::same_as<int>;
@@ -608,6 +626,7 @@ int sgn(T x) {
     return x.sgn();
 }
 
+// abs
 template <std::integral T> inline T abs(T x) { return std::abs(x); }
 inline i128 abs(i128 x) { return x < 0 ? -x : x; }
 template <class T>
@@ -618,7 +637,10 @@ T abs(T x) {
     return x.abs();
 }
 
+
+
 }  // namespace tatsuki
+
 
 #include <bitset>
 #include <iostream>
@@ -627,8 +649,10 @@ T abs(T x) {
 #include <ranges>
 #include <set>
 
+
 #include <cstddef>
 #include <tuple>
+
 
 namespace tatsuki {
 
@@ -879,7 +903,7 @@ const Int HIGH = MID + ERR;
 Scanner sc = Scanner(stdin);
 Printer pr = Printer(stdout);
 
-V<uint> fs[12][5];
+V<uint> fs[12][12];
 
 void init() {
     int n, m;
@@ -892,7 +916,7 @@ void init() {
     assert(high == HIGH);
 
     for (int i : iota(0, 12)) {
-        for (int k : iota(0, 5)) {
+        for (int k : iota(0, 12)) {
             for (uint f : iota(0u, 1u<<i)) {
                 if (popcount(f) == k) {
                     fs[i][k].push_back(f);
@@ -931,9 +955,11 @@ void send_assign(array<int, N> trg) {
 using Node = pair<Int, uint>;  // (sum, mask)
 array<vector<Node>, 11> Lby;
 
+// aからuse枚選んで可能な限りtargetに近づける
 pair<Int, V<bool>> solve_miim(const V<Int>& a, int use, Int target) {
     int n = int(a.size());
     int l_n = n / 2, r_n = n - l_n;
+
 
     for (int c : iota(0, use + 1)) {
         Lby[c].clear();
@@ -1000,25 +1026,16 @@ pair<Int, V<bool>> solve_miim(const V<Int>& a, int use, Int target) {
     return {best, answer};
 }
 
-array<int, 4> BORDER = {0, 250, 500, 500};
-array<int, 3> USES = {4, 4, 0};
-int USE_SUM = USES[0] + USES[1] + USES[2];
-const Int CENTER = MID / (USE_SUM);
-array<Int, 3> TARGETS = { 5 * TEN(6), 4, 0};
+const int USE = 9;
+const Int CENTER = MID / USE;
+const Int TARGET = 5 * TEN(6);
+
 
 array<Int, N> gen_a() {
     array<Int, N> a;
 
-    for (int i : iota(BORDER[0], BORDER[1])) {
-        Int E = 3 * ERR / (USES[0] ? USES[0] : 1);
-        a[i] = random(CENTER - E, CENTER + E, gen);
-    }
-    for (int i : iota(BORDER[1], BORDER[2])) {
-        Int E = 3 * TARGETS[0] / (USES[1] ? USES[1] : 1);
-        a[i] = random(CENTER - E, CENTER + E, gen);
-    }
-    for (int i : iota(BORDER[2], BORDER[3])) {
-        Int E = 3 * TARGETS[1] / (USES[2] ? USES[2] : 1);
+    for (int i : iota(0, N)) {
+        Int E = 3 * ERR / USE;
         a[i] = random(CENTER - E, CENTER + E, gen);
     }
     return a;
@@ -1028,135 +1045,70 @@ array<int, N> calc_assign(array<Int, N> a, array<Int, M> b) {
     array<int, N> assign;
     assign.fill(-1);
 
+    // 反復設定
     #ifdef TATSUKI_LOCAL
-    long long TIME_LIMIT_MS = 950 / 1.7;  // 実行環境に合わせて調整
+    long long TIME_LIMIT_MS = 950 / 1.7;
     #else
-    long long TIME_LIMIT_MS = 950;  // 実行環境に合わせて調整
+    long long TIME_LIMIT_MS = 950;
     #endif
 
-    const int K = 20;                     // 候補集合サイズ
+    const int K = 20;
 
-    for (int phase : iota(0, 3)) {
-        if (phase == 0) TIME_LIMIT_MS *= 1.1;
-        else TIME_LIMIT_MS *= 0.9;
+    StopWatch sw;
 
-        StopWatch sw;
+    int L = 0;
+    int R = N;
 
-        int L = BORDER[phase];
-        int R = BORDER[phase + 1];
-        if (L == R) continue;
-        int USE = USES[phase];
 
-        int REM = USE_SUM;
-        for (int i : iota(0, phase + 1)) REM -= USES[i];
-        dbg(REM);
-
-        {
-            V<int> idx;
-            for (int i : iota(L, R)) {
-                idx.push_back(i);
-            }
-            ranges::shuffle(idx, gen);
-            for (int i : iota(0, M)) {
-                for (int j : iota(0, USE)) {
-                    assign[idx[i * USE + j]] = i;
-                }
-            }
+    // Initial random assignment
+    {
+        V<int> idx;
+        for (int i : iota(L, R)) {
+            idx.push_back(i);
         }
-        array<Int, M> trgs;
+        ranges::shuffle(idx, gen);
         for (int i : iota(0, M)) {
-            trgs[i] = b[i] - CENTER * REM;
-        }
-
-        int iter_count = 0;
-        while (sw.msecs() < TIME_LIMIT_MS) {
-            iter_count++;
-
-            int idx = random(0, M - 1, gen);
-
-            V<int> empty;
-            V<int> val_idx;
-            for (int i : iota(L, R)) {
-                if (assign[i] == -1) empty.push_back(i);
-                if (assign[i] == idx) val_idx.push_back(i);
+            for (int j : iota(0, USE)) {
+                assign[idx[i * USE + j]] = i;
             }
-
-            Int pre_sum = 0;
-            if (phase) {
-                for (int i : iota(0, L)) {
-                    if (assign[i] == idx) pre_sum += a[i];
-                }
-            }
-
-            Int best_sum = 0;
-            for (int i : iota(0, N)) {
-                if (assign[i] == idx) best_sum += a[i];
-            }
-            Int best = abs((pre_sum + best_sum) - trgs[idx]);
-
-            ranges::shuffle(empty, gen);
-            int k = min(K - USE, int(empty.size())) + USE;
-            for (int i : iota(0, k - USE)) {
-                val_idx.push_back(empty[i]);
-            }
-            V<Int> vals;
-            for (auto x : val_idx) vals.push_back(a[x]);
-
-            auto [cur, use] = solve_miim(vals, USE, trgs[idx] - pre_sum);
-            
-            Int diff = best - cur;
-            bool ok = diff >= 0;
-            if (phase == 0) {
-                if (cur <= TARGETS[phase]) ok = true;
-            } else {
-                if (random_01(gen) < exp(1.0 * diff / TARGETS[phase])) ok = true;
-            }
-            if (ok) {
-                for (int i = 0; i < k; ++i) {
-                    assign[val_idx[i]] = (use[i] ? idx : -1);
-                }
-            }
-        }
-        cerr << "phase: " << phase << " " << iter_count << endl;
-    }
-
-    V<Int> current_sums(M, 0);
-    for (int i : iota(0, N)) {
-        if (assign[i] != -1) current_sums[assign[i]] += a[i];
-    }
-
-    V<int> free_cards;
-    for (int i : iota(0, N)) {
-        if (assign[i] == -1) free_cards.push_back(i);
-    }
-    
-    sort(free_cards.begin(), free_cards.end(), [&](int i, int j){
-        return a[i] > a[j];
-    });
-
-    for (int idx : free_cards) {
-        int best_trg = -1;
-        Int best_reduction = -1;
-
-        for (int j : iota(0, M)) {
-            Int current_err = abs(current_sums[j] - b[j]);
-            Int new_err = abs(current_sums[j] + a[idx] - b[j]);
-            
-            if (new_err < current_err) {
-                Int reduction = current_err - new_err;
-                if (reduction > best_reduction) {
-                    best_reduction = reduction;
-                    best_trg = j;
-                }
-            }
-        }
-
-        if (best_trg != -1) {
-            assign[idx] = best_trg;
-            current_sums[best_trg] += a[idx];
         }
     }
 
+    array<Int, M> trgs = b; // Target is just B since we use all cards (conceptually or practically)
+
+    int iter_count = 0;
+    while (sw.msecs() < TIME_LIMIT_MS) {
+        iter_count++;
+
+        int idx = random(0, M - 1, gen);
+
+        V<int> empty;
+        V<int> val_idx;
+        for (int i : iota(L, R)) {
+            if (assign[i] == -1) empty.push_back(i);
+            if (assign[i] == idx) val_idx.push_back(i);
+        }
+
+        ranges::shuffle(empty, gen);
+        int k = min(K - USE, int(empty.size())) + USE;
+        for (int i : iota(0, k - USE)) {
+            val_idx.push_back(empty[i]);
+        }
+        V<Int> vals;
+        for (auto x : val_idx) vals.push_back(a[x]);
+
+        auto [cur, use] = solve_miim(vals, USE, trgs[idx]);
+        
+        bool ok = false;
+        if (cur <= TARGET) ok = true;
+
+        if (ok) {
+            for (int i = 0; i < k; ++i) {
+                assign[val_idx[i]] = (use[i] ? idx : -1);
+            }
+        }
+    }
+    cerr << "iter_count: " << iter_count << endl;
     return assign;
 }
 

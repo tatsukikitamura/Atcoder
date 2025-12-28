@@ -1131,7 +1131,7 @@ array<int, N> calc_assign(array<Int, N> a, array<Int, M> b) {
     }
     
     sort(free_cards.begin(), free_cards.end(), [&](int i, int j){
-        return a[i] > a[j];
+        return a[i] < a[j];
     });
 
     for (int idx : free_cards) {
