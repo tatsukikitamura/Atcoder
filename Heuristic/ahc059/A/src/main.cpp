@@ -7,7 +7,6 @@
 #include <chrono>
 #include <random>
 #include <set>
-
 using namespace std;
 
 // ===== Constants =====
@@ -18,22 +17,18 @@ constexpr int INF = 1e9;
 struct Timer {
     chrono::high_resolution_clock::time_point start;
     double limit;
-
-    Timer(double limit_sec = 1.8) : limit(limit_sec) {
+    
+    Timer(double limit_sec = 1.95) : limit(limit_sec) {
         start = chrono::high_resolution_clock::now();
     }
-
+    
     double elapsed() const {
         auto now = chrono::high_resolution_clock::now();
         return chrono::duration<double>(now - start).count();
     }
-
+    
     bool is_over() const {
         return elapsed() >= limit;
-    }
-
-    double progress() const {
-        return min(1.0, elapsed() / limit);
     }
 };
 
@@ -46,23 +41,26 @@ struct Pos {
     bool operator!=(const Pos& o) const { return !(*this == o); }
 };
 
-int manhattan_dist(const Pos& a, const Pos& b) {
-    return abs(a.r - b.r) + abs(a.c - b.c);
-}
-
 // ===== Input =====
 struct Input {
-    int board[N][N];
-    pair<Pos, Pos> card_pos[N * N / 2];
-
+    int board[N][N];           // 各マスのカード番号
+    pair<Pos, Pos> card_pos[N * N / 2];  // 各カード番号の2枚の位置
+    
     void read() {
         int n;
-        if (!(cin >> n)) return;
+        if (!(cin >> n)) return;  // N=20固定
         vector<bool> first_seen(N * N / 2, true);
         for (int i = 0; i < N; i++) {
             for (int j = 0; j < N; j++) {
                 cin >> board[i][j];
                 int card = board[i][j];
+                
+                // Safety check
+                if (card < 0 || card >= N * N / 2) {
+                    cerr << "[ERROR] Invalid card value at (" << i << "," << j << "): " << card << endl;
+                    exit(1);
+                }
+                
                 if (first_seen[card]) {
                     card_pos[card].first = Pos(i, j);
                     first_seen[card] = false;
@@ -74,420 +72,299 @@ struct Input {
     }
 };
 
-// ===== State Management =====
-struct Group {
-    vector<int> cards;
-    vector<bool> visit_first; // true if first visited before second
+// ===== Utility Functions =====
+int manhattan_dist(const Pos& a, const Pos& b) {
+    return abs(a.r - b.r) + abs(a.c - b.c);
+}
 
-    Pos get_entry_pos(const Input& input) const {
-        int c = cards[0];
-        return visit_first[0] ? input.card_pos[c].first : input.card_pos[c].second;
+// 2点間の移動操作を現在の操作列に追記する
+void append_path(string& path, int& move_count, const Pos& from, const Pos& to) {
+    int dr = to.r - from.r;
+    int dc = to.c - from.c;
+    char r_char = (dr > 0) ? 'D' : 'U';
+    char c_char = (dc > 0) ? 'R' : 'L';
+    dr = abs(dr);
+    dc = abs(dc);
+    for (int i = 0; i < dr; i++) {
+        path += r_char;
+        move_count++;
     }
-
-    Pos get_exit_pos(const Input& input) const {
-        int c = cards[0];
-        return visit_first[0] ? input.card_pos[c].second : input.card_pos[c].first;
+    for (int i = 0; i < dc; i++) {
+        path += c_char;
+        move_count++;
     }
-
-    int internal_cost(const Input& input) const {
-        int cost = 0;
-        Pos cur = get_entry_pos(input);
-        for (size_t i = 0; i < cards.size(); ++i) {
-            int c = cards[i];
-            Pos p1 = input.card_pos[c].first;
-            Pos p2 = input.card_pos[c].second;
-            Pos target1 = visit_first[i] ? p1 : p2;
-            cost += manhattan_dist(cur, target1);
-            cur = target1;
-        }
-        for (int i = (int)cards.size() - 1; i >= 0; --i) {
-            int c = cards[i];
-            Pos p1 = input.card_pos[c].first;
-            Pos p2 = input.card_pos[c].second;
-            Pos target2 = visit_first[i] ? p2 : p1;
-            cost += manhattan_dist(cur, target2);
-            cur = target2;
-        }
-        return cost;
-    }
-};
+}
 
 // ===== Solver =====
 class Solver {
 public:
     Input input;
     Timer timer;
+    string best_operations;
+    int best_move_count;
+    
+    // For current iteration
+    string operations;
+    int move_count;
+    Pos current_pos;
+    
+    vector<bool> used;
+    
+    struct Candidate {
+        int card;
+        bool visit_first;
+        int cost;
+        int density_bonus;  // 周囲のカード密集度（高いほど良い）
+        double score;       // 総合スコア（低いほど良い）
+    };
+    vector<Candidate> candidates;
+
     mt19937 rng;
-
-    vector<Group> current_groups;
-    int current_cost;
-
-    vector<Group> best_groups;
-    int best_cost;
-
-    Solver() : rng(42), current_cost(INF), best_cost(INF) {}
-
+    
+    Solver() : best_move_count(INF), rng(42) {
+        used.resize(N * N / 2);
+        candidates.reserve(N * N); // Max candidates (2 per card)
+    }
+    
     void solve() {
         input.read();
-        init_greedy();
         
-        best_groups = current_groups;
-        best_cost = current_cost;
-        cerr << "[DEBUG] Initial Cost: " << current_cost << endl;
-
-        double start_temp = 20.0; 
-        double end_temp = 0.01;
-        long long iterations = 0;
-
+        int iteration = 0;
+        
         while (!timer.is_over()) {
-            iterations++;
-            double progress = timer.progress();
-            double temp = start_temp + (end_temp - start_temp) * progress;
+            // 初回は必ずdeterministic (greedy) を実行し、ベースラインスコアを保証する
+            bool deterministic = (iteration == 0);
+            run_iteration(deterministic);
+            
+            if (move_count < best_move_count) {
+                best_move_count = move_count;
+                best_operations = operations;
+                cerr << "[DEBUG] New Best: " << best_move_count << " (Iter " << iteration + 1 << ")" << endl;
+            }
+            iteration++;
+        }
+        
+        cerr << "[DEBUG] Total Iterations: " << iteration << ", Time: " << timer.elapsed() << "s" << endl;
+        output();
+    }
+    
+    // マージグループを実行する操作列を生成 (Iterative)
+    void generate_merge_group_operations(const vector<int>& group, 
+                                          const vector<bool>& group_visit_first) {
+        // [Outer1 -> [Inner1 -> ... -> [Core] ... -> Inner2] -> Outer2]
+        // = (Outer1 -> Inner1 -> ... -> Core1 -> Core2 -> ... -> Inner2 -> Outer2)
+        // 順番:
+        // 1. group[0] 1st -> group[1] 1st -> ... -> group[k] 1st
+        // 2. group[k] 2nd -> ... -> group[1] 2nd -> group[0] 2nd
+        
+        // 1. 往路 (Outer -> Inner)
+        for (size_t i = 0; i < group.size(); ++i) {
+            int card = group[i];
+            Pos p1 = input.card_pos[card].first;
+            Pos p2 = input.card_pos[card].second;
+            Pos target = group_visit_first[i] ? p1 : p2;
+            
+            append_path(operations, move_count, current_pos, target);
+            current_pos = target;
+            operations += 'Z';
+        }
 
-            int op = uniform_int_distribution<int>(0, 6)(rng);
-            vector<Group> prev_groups = current_groups;
-            int old_cost = current_cost;
+        // 2. 復路 (Inner -> Outer)
+        for (int i = (int)group.size() - 1; i >= 0; --i) {
+            int card = group[i];
+            Pos p1 = input.card_pos[card].first;
+            Pos p2 = input.card_pos[card].second;
+            Pos target = group_visit_first[i] ? p2 : p1; // 往路と逆側
+            
+            append_path(operations, move_count, current_pos, target);
+            current_pos = target;
+            operations += 'Z';
+        }
+    }
+    
+    // 挿入コストを計算（寄り道コスト）
+    // Outerの移動経路(O_start -> O_end)の間にInner(I_start -> I_end)を挟む場合の追加コスト
+    // Cost = (dist(O_S, I_S) + dist(I_S, I_E) + dist(I_E, O_E)) - dist(O_S, O_E)
+    // ただし、Inner自体の移動距離(dist(I_S, I_E))は必須なので、純粋な「寄り道分」は
+    // (dist(O_S, I_S) + dist(I_E, O_E)) - (dist(O_S, O_E) - dist(I_S, I_E)) ... ではなく
+    // 単純に、トータル移動距離の増加分を見るのが適切。
+    // 元の移動距離: dist(O_S, O_E)
+    // 新しい移動距離: dist(O_S, I_S) + dist(I_S, I_E) + dist(I_E, O_E)
+    // 増加分 (Insertion Cost): 新しい移動距離 - 元の移動距離 - Innerの本来の移動距離
+    // ... と考えたいが、ここでは「親のパスにどれだけスムーズに乗れるか」を評価したい。
+    // 親のパスの中に完全に包含されるなら、追加コストは0になるべき。
+    // 親: A -> B, 子: C -> D
+    // A -> C -> D -> B
+    // 距離: dist(A,C) + dist(C,D) + dist(D,B)
+    // 親の本来: dist(A,B)
+    // 子の本来: dist(C,D)
+    // 増加分 = (dist(A,C) + dist(C,D) + dist(D,B)) - dist(A,B) - dist(C,D)
+    //        = dist(A,C) + dist(D,B) - dist(A,B)
+    // これが0なら、CとDはA->Bの最短経路上にあり、かつ順序も整合している。
+    int calc_insertion_cost(const Pos& o_s, const Pos& o_e, const Pos& i_s, const Pos& i_e) {
+        int d_total = manhattan_dist(o_s, i_s) + manhattan_dist(i_s, i_e) + manhattan_dist(i_e, o_e);
+        int d_base = manhattan_dist(o_s, o_e) + manhattan_dist(i_s, i_e);
+        return d_total - d_base;
+    }
 
-            bool possible = true;
-            if (op == 0) { // Swap Groups
-                int i = uniform_int_distribution<int>(0, (int)current_groups.size() - 1)(rng);
-                int j = uniform_int_distribution<int>(0, (int)current_groups.size() - 1)(rng);
-                if (i == j) { possible = false; }
-                else { swap(current_groups[i], current_groups[j]); }
-            } 
-            else if (op == 1) { // Flip Group
-                int i = uniform_int_distribution<int>(0, (int)current_groups.size() - 1)(rng);
-                for (size_t k = 0; k < current_groups[i].visit_first.size(); ++k) {
-                    current_groups[i].visit_first[k] = !current_groups[i].visit_first[k];
-                }
-            }
-            else if (op == 2) { // Move Group
-                int i = uniform_int_distribution<int>(0, (int)current_groups.size() - 1)(rng);
-                int j = uniform_int_distribution<int>(0, (int)current_groups.size() - 1)(rng);
-                if (i == j) { possible = false; }
-                else {
-                    Group g = current_groups[i];
-                    current_groups.erase(current_groups.begin() + i);
-                    current_groups.insert(current_groups.begin() + j, g);
-                }
-            }
-            else if (op == 3) { // Merge Adjacent
-                if (current_groups.size() < 2) { possible = false; }
-                else {
-                    int i = uniform_int_distribution<int>(0, (int)current_groups.size() - 2)(rng);
-                    for (size_t k = 0; k < current_groups[i+1].cards.size(); ++k) {
-                        current_groups[i].cards.push_back(current_groups[i+1].cards[k]);
-                        current_groups[i].visit_first.push_back(current_groups[i+1].visit_first[k]);
-                    }
-                    current_groups.erase(current_groups.begin() + i + 1);
-                }
-            }
-            else if (op == 4) { // Split
-                int i = uniform_int_distribution<int>(0, (int)current_groups.size() - 1)(rng);
-                if (current_groups[i].cards.size() < 2) { possible = false; }
-                else {
-                    Group new_g;
-                    new_g.cards.push_back(current_groups[i].cards.back());
-                    new_g.visit_first.push_back(current_groups[i].visit_first.back());
-                    current_groups[i].cards.pop_back();
-                    current_groups[i].visit_first.pop_back();
-                    current_groups.insert(current_groups.begin() + i + 1, new_g);
-                }
-            }
-            else if (op == 5) { // Merge Random
-                if (current_groups.size() < 2) { possible = false; }
-                else {
-                    int i = uniform_int_distribution<int>(0, (int)current_groups.size() - 1)(rng);
-                    int j = uniform_int_distribution<int>(0, (int)current_groups.size() - 1)(rng);
-                    if (i == j) { possible = false; }
-                    else {
-                        for (size_t k = 0; k < current_groups[j].cards.size(); ++k) {
-                            current_groups[i].cards.push_back(current_groups[j].cards[k]);
-                            current_groups[i].visit_first.push_back(current_groups[j].visit_first[k]);
-                        }
-                        current_groups.erase(current_groups.begin() + j);
-                    }
-                }
-            }
-            else if (op == 6) { // Move Card between groups
-                int i = uniform_int_distribution<int>(0, (int)current_groups.size() - 1)(rng);
-                int j = uniform_int_distribution<int>(0, (int)current_groups.size() - 1)(rng);
-                if (i == j || current_groups[i].cards.empty()) { possible = false; }
-                else {
-                    int card_idx = uniform_int_distribution<int>(0, (int)current_groups[i].cards.size() - 1)(rng);
-                    int c = current_groups[i].cards[card_idx];
-                    bool vf = current_groups[i].visit_first[card_idx];
-                    current_groups[i].cards.erase(current_groups[i].cards.begin() + card_idx);
-                    current_groups[i].visit_first.erase(current_groups[i].visit_first.begin() + card_idx);
-                    if (current_groups[i].cards.empty()) {
-                        current_groups.erase(current_groups.begin() + i);
-                        if (j > i) j--;
-                    }
-                    current_groups[j].cards.push_back(c);
-                    current_groups[j].visit_first.push_back(vf);
-                }
-            }
+    // ===== 始点・終点近接グループ化戦略 (Iterative Nesting Check) =====
+    // 戻り値を vector<int> から vector<pair<int, bool>> に変更
+    // 各カードについて {card_id, visit_first} のペアを返す
+    vector<pair<int, bool>> find_proximity_group(int main_card, bool main_visit_first, 
+                                     const vector<bool>& used, int max_depth = 3) {
+        vector<pair<int, bool>> group;
+        group.push_back({main_card, main_visit_first});
+        
+        Pos current_start = main_visit_first ? input.card_pos[main_card].first : input.card_pos[main_card].second;
+        Pos current_end = main_visit_first ? input.card_pos[main_card].second : input.card_pos[main_card].first;
+        
+        for (int depth = 1; depth < max_depth; depth++) {
+            int best_inner = -1;
+            int min_insertion_cost = INF;
+            bool best_inner_visit_first = true;
 
-            if (!possible) { continue; }
-
-            int new_cost = 0;
-            Pos p(0, 0);
-            for (const auto& g : current_groups) {
-                new_cost += manhattan_dist(p, g.get_entry_pos(input));
-                new_cost += g.internal_cost(input);
-                p = g.get_exit_pos(input);
+            for (int card = 0; card < N * N / 2; card++) {
+                if (used[card]) continue;
+                if (card == main_card) continue;
+                
+                bool already_in_group = false;
+                for (auto& g : group) if (g.first == card) already_in_group = true;
+                if (already_in_group) continue;
+                
+                Pos p1 = input.card_pos[card].first;
+                Pos p2 = input.card_pos[card].second;
+                
+                int cost1 = calc_insertion_cost(current_start, current_end, p1, p2);
+                int cost2 = calc_insertion_cost(current_start, current_end, p2, p1);
+                
+                if (cost1 < min_insertion_cost) {
+                    min_insertion_cost = cost1;
+                    best_inner = card;
+                    best_inner_visit_first = true;
+                }
+                if (cost2 < min_insertion_cost) {
+                    min_insertion_cost = cost2;
+                    best_inner = card;
+                    best_inner_visit_first = false;
+                }
             }
-
-            if (accept(new_cost - old_cost, temp)) {
-                current_cost = new_cost;
-                update_best();
+            
+            if (best_inner != -1 && min_insertion_cost <= 1) {
+                group.push_back({best_inner, best_inner_visit_first});
+                Pos p1 = input.card_pos[best_inner].first;
+                Pos p2 = input.card_pos[best_inner].second;
+                if (best_inner_visit_first) {
+                    current_start = p1; current_end = p2;
+                } else {
+                    current_start = p2; current_end = p1;
+                }
             } else {
-                current_groups = prev_groups;
+                break;
             }
         }
-
-        cerr << "[DEBUG] Iterations: " << iterations << ", Best Cost: " << best_cost << endl;
-        output(best_groups);
+        return group;
     }
 
-private:
-    bool accept(int delta, double temp) {
-        if (delta <= 0) return true;
-        return uniform_real_distribution<double>(0, 1)(rng) < exp(-delta / temp);
-    }
-
-    void update_best() {
-        if (current_cost < best_cost) {
-            best_cost = current_cost;
-            best_groups = current_groups;
-        }
-    }
-
-    int calc_segment_cost(int i) {
-        if (i < 0 || i >= (int)current_groups.size()) return 0;
-        Pos prev_exit = (i == 0) ? Pos(0, 0) : current_groups[i-1].get_exit_pos(input);
-        return manhattan_dist(prev_exit, current_groups[i].get_entry_pos(input)) + current_groups[i].internal_cost(input);
-    }
-
-    // Technique 3 & 5: Calculate score difference locally
-    int calc_swap_delta(int i, int j) {
-        if (i > j) swap(i, j);
-        int old_cost = 0;
-        int new_cost = 0;
-
-        // segments affected: i-1->i, i->i+1, j-1->j, j->j+1
-        auto get_dist = [&](int idx, Pos prev_exit) {
-            if (idx < 0 || idx >= (int)current_groups.size()) return 0;
-            return manhattan_dist(prev_exit, current_groups[idx].get_entry_pos(input)) + current_groups[idx].internal_cost(input);
-        };
-
-        // Old
-        old_cost += get_dist(i, (i == 0) ? Pos(0, 0) : current_groups[i-1].get_exit_pos(input));
-        old_cost += get_dist(i+1, current_groups[i].get_exit_pos(input));
-        if (j > i + 1) {
-            old_cost += get_dist(j, current_groups[j-1].get_exit_pos(input));
-        }
-        if (j != i) {
-            old_cost += get_dist(j+1, current_groups[j].get_exit_pos(input));
-        }
-
-        // New (Simulate swap)
-        swap(current_groups[i], current_groups[j]);
-        new_cost += get_dist(i, (i == 0) ? Pos(0, 0) : current_groups[i-1].get_exit_pos(input));
-        new_cost += get_dist(i+1, current_groups[i].get_exit_pos(input));
-        if (j > i + 1) {
-            new_cost += get_dist(j, current_groups[j-1].get_exit_pos(input));
-        }
-        if (j != i) {
-            new_cost += get_dist(j+1, current_groups[j].get_exit_pos(input));
-        }
-        swap(current_groups[i], current_groups[j]); // Revert simulation
-
-        return new_cost - old_cost;
-    }
-
-    int calc_flip_delta(int i) {
-        int old_c = calc_segment_cost(i);
-        if (i + 1 < (int)current_groups.size()) old_c += manhattan_dist(current_groups[i].get_exit_pos(input), current_groups[i+1].get_entry_pos(input));
-
-        for (size_t k = 0; k < current_groups[i].visit_first.size(); ++k) current_groups[i].visit_first[k] = !current_groups[i].visit_first[k];
-        int new_c = calc_segment_cost(i);
-        if (i + 1 < (int)current_groups.size()) new_c += manhattan_dist(current_groups[i].get_exit_pos(input), current_groups[i+1].get_entry_pos(input));
-        for (size_t k = 0; k < current_groups[i].visit_first.size(); ++k) current_groups[i].visit_first[k] = !current_groups[i].visit_first[k];
-
-        return new_c - old_c;
-    }
-
-    int calc_move_delta(int i, int j) {
-        auto full_cost = [&](const vector<Group>& gs) {
-            int c = 0;
-            Pos cur(0, 0);
-            for (const auto& g : gs) {
-                c += manhattan_dist(cur, g.get_entry_pos(input));
-                c += g.internal_cost(input);
-                cur = g.get_exit_pos(input);
-            }
-            return c;
-        };
-
-        int old_f = full_cost(current_groups);
-        Group gi = current_groups[i];
-        vector<Group> next_gs = current_groups;
-        next_gs.erase(next_gs.begin() + i);
-        next_gs.insert(next_gs.begin() + j, gi);
-        int new_f = full_cost(next_gs);
-        return new_f - old_f;
-    }
-
-    int calc_merge_delta(int i, int j) {
-        auto full_cost = [&](const vector<Group>& gs) {
-            int c = 0;
-            Pos cur(0, 0);
-            for (const auto& g : gs) {
-                c += manhattan_dist(cur, g.get_entry_pos(input));
-                c += g.internal_cost(input);
-                cur = g.get_exit_pos(input);
-            }
-            return c;
-        };
-
-        int old_f = full_cost(current_groups);
-        vector<Group> next_gs = current_groups;
-        for (size_t k = 0; k < next_gs[i+1].cards.size(); ++k) {
-            next_gs[i].cards.push_back(next_gs[i+1].cards[k]);
-            next_gs[i].visit_first.push_back(next_gs[i+1].visit_first[k]);
-        }
-        next_gs.erase(next_gs.begin() + i + 1);
-        int new_f = full_cost(next_gs);
-        
-        return new_f - old_f;
-    }
-
-    int calc_split_delta(int i) {
-        auto full_cost = [&](const vector<Group>& gs) {
-            int c = 0;
-            Pos cur(0, 0);
-            for (const auto& g : gs) {
-                c += manhattan_dist(cur, g.get_entry_pos(input));
-                c += g.internal_cost(input);
-                cur = g.get_exit_pos(input);
-            }
-            return c;
-        };
-
-        int old_f = full_cost(current_groups);
-        vector<Group> next_gs = current_groups;
-        Group new_g;
-        new_g.cards.push_back(next_gs[i].cards.back());
-        new_g.visit_first.push_back(next_gs[i].visit_first.back());
-        next_gs[i].cards.pop_back();
-        next_gs[i].visit_first.pop_back();
-        next_gs.insert(next_gs.begin() + i + 1, new_g);
-        int new_f = full_cost(next_gs);
-        
-        return new_f - old_f;
-    }
-
-    void init_greedy() {
-        current_groups.clear();
-        vector<bool> used(N * N / 2, false);
+    void run_iteration(bool deterministic) {
+        operations.clear();
+        move_count = 0;
+        current_pos = Pos(0, 0);
+        fill(used.begin(), used.end(), false);
         int remaining = N * N / 2;
-        Pos cur(0, 0);
-
         while (remaining > 0) {
-            struct Candidate { int card; bool visit_first; int cost; };
-            vector<Candidate> cands;
-            for (int c = 0; c < N * N / 2; ++c) {
-                if (used[c]) continue;
-                int d1 = manhattan_dist(cur, input.card_pos[c].first);
-                int d2 = manhattan_dist(cur, input.card_pos[c].second);
-                cands.push_back({c, true, d1});
-                cands.push_back({c, false, d2});
-            }
-            sort(cands.begin(), cands.end(), [](const Candidate& a, const Candidate& b) { return a.cost < b.cost; });
-            Candidate best = cands[0];
+            candidates.clear();
             
-            Group g;
-            g.cards.push_back(best.card);
-            g.visit_first.push_back(best.visit_first);
-            used[best.card] = true;
-            remaining--;
-            
-            Pos inner_start = best.visit_first ? input.card_pos[best.card].first : input.card_pos[best.card].second;
-            Pos inner_end = best.visit_first ? input.card_pos[best.card].second : input.card_pos[best.card].first;
-            
-            while (true) {
-                int best_nest = -1;
-                bool nest_first = true;
-                int min_nest = INF;
-                for (int c = 0; c < N * N / 2; ++c) {
-                    if (used[c]) continue;
-                    int cost1 = manhattan_dist(inner_start, input.card_pos[c].first) + manhattan_dist(input.card_pos[c].second, inner_end) - manhattan_dist(inner_start, inner_end);
-                    int cost2 = manhattan_dist(inner_start, input.card_pos[c].second) + manhattan_dist(input.card_pos[c].first, inner_end) - manhattan_dist(inner_start, inner_end);
-                    if (cost1 < min_nest) { min_nest = cost1; best_nest = c; nest_first = true; }
-                    if (cost2 < min_nest) { min_nest = cost2; best_nest = c; nest_first = false; }
+            for (int card = 0; card < N * N / 2; card++) {
+                if (used[card]) continue;
+                
+                Pos p1 = input.card_pos[card].first;
+                Pos p2 = input.card_pos[card].second;
+                
+                int cost1 = manhattan_dist(current_pos, p1);
+                int cost2 = manhattan_dist(current_pos, p2);
+                
+                if (cost1 <= cost2) {
+                    candidates.push_back({card, true, cost1});
+                } else {
+                    candidates.push_back({card, false, cost2});
                 }
-
-                if (best_nest != -1 && min_nest <= 2) {
-                    g.cards.push_back(best_nest);
-                    g.visit_first.push_back(nest_first);
-                    used[best_nest] = true;
+            }
+            
+            if (candidates.empty()) break;
+            
+            // コストでソート
+            sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
+                return a.cost < b.cost;
+            });
+            
+            Candidate best = candidates[0];
+            if (!deterministic) {
+                int K = 8;  // 候補数を増加
+                int range = min((int)candidates.size(), K);
+                
+                // コストに基づくsoftmax（ボルツマン）選択
+                double T = 1.5;  // 温度パラメータ（大きいほど探索的、小さいほどGreedy）
+                
+                // 重みを計算
+                vector<double> weights(range);
+                double sum_weights = 0.0;
+                int min_cost = candidates[0].cost;
+                for (int i = 0; i < range; i++) {
+                    // コスト差に基づく重み (最小コストを基準に)
+                    weights[i] = exp(-(candidates[i].cost - min_cost) / T);
+                    sum_weights += weights[i];
+                }
+                
+                // 確率的に選択
+                double r = uniform_real_distribution<double>(0, sum_weights)(rng);
+                double cumsum = 0.0;
+                int pick_idx = 0;
+                for (int i = 0; i < range; i++) {
+                    cumsum += weights[i];
+                    if (r <= cumsum) {
+                        pick_idx = i;
+                        break;
+                    }
+                }
+                best = candidates[pick_idx];
+            }
+            
+            int best_card = best.card;
+            bool best_visit_first = best.visit_first;
+            
+            vector<pair<int, bool>> detailed_group = find_proximity_group(best_card, best_visit_first, used, 200);
+            
+            vector<int> merge_group;
+            vector<bool> group_visit_first;
+            for (auto& p : detailed_group) {
+                merge_group.push_back(p.first);
+                group_visit_first.push_back(p.second);
+            }
+            
+            generate_merge_group_operations(merge_group, group_visit_first);
+            
+            for (int card : merge_group) {
+                if (!used[card]) {
+                    used[card] = true;
                     remaining--;
-                    inner_start = nest_first ? input.card_pos[best_nest].first : input.card_pos[best_nest].second;
-                    inner_end = nest_first ? input.card_pos[best_nest].second : input.card_pos[best_nest].first;
-                } else break;
+                }
             }
-            cur = g.get_exit_pos(input);
-            current_groups.push_back(g);
-        }
-
-        current_cost = 0;
-        Pos p(0, 0);
-        for (const auto& g : current_groups) {
-            current_cost += manhattan_dist(p, g.get_entry_pos(input));
-            current_cost += g.internal_cost(input);
-            p = g.get_exit_pos(input);
         }
     }
-
-    void append_path(string& path, int& move_count, const Pos& from, const Pos& to) {
-        int dr = to.r - from.r;
-        int dc = to.c - from.c;
-        char r_char = (dr > 0) ? 'D' : 'U';
-        char c_char = (dc > 0) ? 'R' : 'L';
-        dr = abs(dr); dc = abs(dc);
-        for (int i = 0; i < dr; i++) { path += r_char; move_count++; }
-        for (int i = 0; i < dc; i++) { path += c_char; move_count++; }
-    }
-
-    void output(const vector<Group>& groups) {
-        Pos cur(0, 0);
-        int total_moves = 0;
-        string ops;
-        for (const auto& g : groups) {
-            // Forward
-            for (size_t i = 0; i < g.cards.size(); ++i) {
-                Pos target = g.visit_first[i] ? input.card_pos[g.cards[i]].first : input.card_pos[g.cards[i]].second;
-                append_path(ops, total_moves, cur, target);
-                cur = target;
-                ops += 'Z';
-            }
-            // Backward
-            for (int i = (int)g.cards.size() - 1; i >= 0; --i) {
-                Pos target = g.visit_first[i] ? input.card_pos[g.cards[i]].second : input.card_pos[g.cards[i]].first;
-                append_path(ops, total_moves, cur, target);
-                cur = target;
-                ops += 'Z';
-            }
+    
+    void output() {
+        for (char c : best_operations) {
+            cout << c << "\n";
         }
-        for (char c : ops) cout << c << "\n";
     }
 };
 
 int main() {
     ios::sync_with_stdio(false);
     cin.tie(nullptr);
+    
     Solver solver;
     solver.solve();
+    
     return 0;
 }
