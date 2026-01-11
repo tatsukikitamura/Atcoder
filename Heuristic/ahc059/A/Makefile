@@ -1,7 +1,7 @@
 CXX = g++
 CXXFLAGS = -std=c++23 -O2 -Wall
 
-.PHONY: all clean run test
+.PHONY: all clean run test vis gen fast-test
 
 # デフォルト: メインソルバーをビルド
 all: build/main

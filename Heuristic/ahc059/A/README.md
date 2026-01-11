@@ -37,5 +37,113 @@
 特に、後半で行った「Merge/Split遷移の追加」と「Phase 1の時間延長」が、最後のスコアの伸びを支えた決定打になりましたね。
 
 ---
+
+## 🔧 現在の実装詳細 (main.cpp)
+
+### アーキテクチャ概要
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                      Solver                              │
+├─────────────────────────────────────────────────────────┤
+│  solve()                                                 │
+│    └─ while (!timer.is_over())                          │
+│         └─ run_iteration(deterministic)                 │
+│              └─ 候補生成 → softmax選択 → グループ構築   │
+├─────────────────────────────────────────────────────────┤
+│  主要コンポーネント:                                      │
+│  ・Timer: 制限時間管理 (1.95秒)                          │
+│  ・Candidate: カード候補の評価構造体                      │
+│  ・find_proximity_group(): 入れ子グループ発見            │
+│  ・generate_merge_group_operations(): パス生成           │
+└─────────────────────────────────────────────────────────┘
+```
+
+### 主要パラメータ
+
+| パラメータ | 値 | 説明 |
+|---|---|---|
+| `K` | 8 | softmax選択の候補数 |
+| `T` | 1.5 | 温度パラメータ（低いほどGreedy） |
+| `max_depth` | 200 | 入れ子グループの最大深さ |
+| `insertion_cost_threshold` | 1 | グループ挿入を許可する最大コスト |
+| `timer.limit` | 1.95秒 | 実行時間制限 |
+
+### アルゴリズム詳細
+
+#### 1. Softmax（ボルツマン）選択
+```cpp
+// コスト差に基づく重み計算
+weights[i] = exp(-(candidates[i].cost - min_cost) / T);
+
+// 累積確率で選択
+double r = uniform_real_distribution<double>(0, sum_weights)(rng);
+```
+- 固定確率ではなく、**コストに応じた連続的な確率分布**で候補を選択
+- 温度T=1.5で適度な探索と収束のバランスを実現
+
+#### 2. 入れ子グループ化 (Proximity Grouping)
+```cpp
+// 挿入コスト = 寄り道による追加距離
+insertion_cost = dist(A,C) + dist(D,B) - dist(A,B)
+```
+- メインカードの経路上に別のカードを「入れ子」にできるか判定
+- 挿入コストが閾値(≤1)以下なら入れ子に追加
+- 往路→復路のネスト構造で複数カードを一度に処理
+
+#### 3. 多スタート貪欲法
+```cpp
+while (!timer.is_over()) {
+    run_iteration(deterministic);  // 1つの完全な解を構築
+    if (move_count < best_move_count) {
+        // ベスト更新
+    }
+}
+```
+- 時間いっぱい何度も解を再構築
+- 初回のみ決定的（純粋Greedy）、以後はsoftmax選択でランダム性を導入
+
+### 再利用可能なコンポーネント
+
+#### ✅ Timer
+```cpp
+Timer timer(1.95);
+while (!timer.is_over()) { ... }
+double t = timer.elapsed();
+```
+
+#### ✅ Manhattan距離
+```cpp
+int manhattan_dist(const Pos& a, const Pos& b);
+```
+
+#### ✅ パス生成
+```cpp
+void append_path(string& path, int& move_count, const Pos& from, const Pos& to);
+```
+
+#### ✅ Softmax選択テンプレート
+```cpp
+// K個の候補から温度Tでsoftmax選択
+vector<double> weights(K);
+for (int i = 0; i < K; i++) {
+    weights[i] = exp(-(cost[i] - min_cost) / T);
+}
+// 累積確率で選択...
+```
+
+---
+
+## 📈 スコア改善履歴
+
+| 変更内容 | move_count | 備考 |
+|---|---|---|
+| 初期実装（純粋Greedy） | ~1300 | ベースライン |
+| 入れ子グループ化導入 | ~1268 | 複数カードを一度に処理 |
+| 固定確率選択（K=4） | 1236 | ランダム性で局所解回避 |
+| **Softmax選択（K=8, T=1.5）** | **1229** | コストに基づく確率分布 |
+
+---
+
 このまとめが、次回のコンテスト（AHC060？）や、今後のヒューリスティックコンテストの備忘録になれば幸いです！
 また一緒に爆速でスコアを上げましょう！
