@@ -1,4 +1,4 @@
-CXX = g++
+CXX = g++-15
 CXXFLAGS = -std=c++23 -O2 -Wall
 
 .PHONY: all clean run test vis gen fast-test
