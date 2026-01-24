@@ -41,19 +41,29 @@ public:
     }
 };
 
-// Random number generator
+// Fast Random using xorshift128+
 class Random {
+    uint64_t s[2];
 public:
-    mt19937 rng;
+    Random(uint64_t seed = 42) {
+        s[0] = seed;
+        s[1] = seed * 0x123456789ABCDEF;
+    }
     
-    Random(unsigned seed = 42) : rng(seed) {}
+    uint64_t next() {
+        uint64_t x = s[0], y = s[1];
+        s[0] = y;
+        x ^= x << 23;
+        s[1] = x ^ y ^ (x >> 17) ^ (y >> 26);
+        return s[1] + y;
+    }
     
     int randint(int lo, int hi) {
-        return uniform_int_distribution<int>(lo, hi)(rng);
+        return lo + next() % (uint64_t)(hi - lo + 1);
     }
     
     double uniform(double lo = 0.0, double hi = 1.0) {
-        return uniform_real_distribution<double>(lo, hi)(rng);
+        return lo + (hi - lo) * (next() * (1.0 / UINT64_MAX));
     }
 };
 

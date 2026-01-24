@@ -1,0 +1,1418 @@
+学術・研究公正概論
+第1回 学術研究における公正と責任ある研究活動
+大学総合研究センター 札野 順
+
+本科目の概要
+学術研究は何のためにあるのか。未知の領域に挑戦し合理と実証に基づき
+新たな知識を生み出す者、あるいは、その知識を利活用する方法を考案す
+る者、すなわち、研究者が担う基本的な責任とは何なのか。また、研究者が
+目指すべきものは何か。本科目では、受講者がこれらの問いに自ら答えを
+だすことができるようになることを目的に、学術研究における公正（academic
+research integrity）と責任ある研究活動（responsible conduct of research）
+について、様々な視点から検討します。学内外の専門の先生方によるオム
+ニバス形式の講義を通じて、研究の計画から遂行、さらに成果発表や査読
+にいたるまでのプロセスにおいて、研究者が果たすべき役割と責任につい
+て、具体的な事例をまじえながら、議論します。
+
+2
+
+本科目の成績評価方法
+割合(%)
+試験
+Examination
+
+評価基準
+
+50%
+
+講義内容に関するテスト
+Test of comprehension of the content of the lectures
+
+レポート
+Report
+
+30%
+
+自身が早稲田大学において研究を行う目的と意義、研究者の社会的責
+任・役割に関する1600字程度のエッセイ
+An essay on the aim and meaning of the conduct of your research at Waseda
+University/the social role and responsibility of researchers (800-1000 words)
+
+平常点評価
+
+0%
+
+その他
+Others
+
+20%
+
+日本学術振興会提供の研究倫理eラーニングコース「eL CoRE」の修了証の
+提出
+Submission of a certificate of completion of the Japan Society of the Promotion
+of Sciences e-learning course,“eL CoRE.”
+3
+
+早稲田大学学術研究倫理憲章
+早稲田大学は、「学の独立」および「進取の精神」という建学の精
+神に則り、学問の使命に対する高い理想を持ち、学術研究活動を
+通じて、人類の福祉と世界平和に貢献する。学術研究に関与する
+者は、それが人間、社会および自然環境に多大な影響を及ぼすこ
+とに鑑み、本学が受け継いできた良き伝統を堅持しつつ、常に良
+心に従って自己研鑽に努め、現代社会の今日的課題にも果敢に
+挑戦する。本学は、学術研究の信頼性と公正性お よび自由な研
+究活動の遂行を確保し、これに相応しい社会的責任を自覚して、
+本学の学 術研究が社会から多くの信頼と尊敬を得られるよう、本
+学の研究活動に携わるすべての 者に係る倫理的な態度と行動規
+範として、以下を宣言する。
+4
+
+早稲田大学学術研究倫理憲章
+1. 本学の学術研究は、人類の福祉や世界平和など、人類共通の課題に貢献する。
+2. 本学の学術研究は、人間の尊厳を守り、生命倫理を尊重し、人間、社会、自然との調
+和的発展や社会的弱者の保護、地球環境の保全に十分配慮し、公益の増進に積極
+的に貢献する。
+3. 本学の学術研究は、国際的規範、国内外関係諸法令および学内諸規定とその精神
+を遵守し、社会的良識をもって誠実に遂行し、研究成果を適切に発表することで時代
+や社会の要請に積極的に応える。
+4. 本学の学術研究においては、人権を尊重し、個人情報の保護に留意し、共同作業の
+過程において一切のハラスメント行為や国籍、性別、年齢等による差別が生じないよ
+う努めるとともに、そうした行為のない大学づくりのために一致協力する。
+5. 本学の学術研究においては、社会との連携活動に伴う弊害が生じることのないよう留
+意し、適切なマネジメントに努める。
+6. 本学は、研究倫理に係わる教育・研修、研究環境の改善・整備および安全管理等に
+努め、不正行為が起こらない環境づくりに努める。
+5
+
+アウトライン
+1. 研究倫理とは
+2. 責任ある研究活動（Responsible Conduct of
+Research: RCR）の必要性
+3. 予防倫理と志向倫理
+4. 科学技術倫理2.0とwell-beingの科学的検討
+5. 結語：倫理的研究者とwell-being
+6
+
+さて、
+（学術）研究倫理とは
+
+7
+
+研究倫理＝（学術）研究＋倫理
+• 倫理（ethics）とは
+• 学術研究（academic research）と
+は
+8
+
+こんなんどうおもいはります？
+• 「儲かってまっか？」
+• エスカレーターのどっち側
+に立ちます？
+
+9
+
+倫理（ethics）とは
+1.（語源：ethos, mores）
+習俗、慣習、（性格、徳）
+
+2.ある社会集団の行動規範
+3.学問分野としての倫理学
+Michael Davis
+10
+
+「倫理」とは
+• 倫理:「人倫のみち。実際道徳の規範となる原理。
+道徳。」（広辞苑）
+• 人倫:「人と人との秩序関係。君臣・父子・夫婦な
+ど、上下・長幼などの秩序。転じて、人として守
+るべき道。人としての道。」（広辞苑）
+
+11
+
+「倫理＝道徳」→「道徳」とは
+• 道徳:「人のふみ行うべき道。ある社会で、その成員
+の社会に対する、あるいは成員相互間の行為の善悪
+を判断する基準として、一般に承認されている規範
+の総体。法律のような外面的強制力を伴うものでは
+なく、個人の内面的な原理。今日では、自然や文化
+財や技術品など、事物に対する人間の在るべき態度
+もこれに含まれる。」
+（広辞苑）
+
+12
+
+「研究」とは
+よく調べ考えて真理をきわめること。（広辞苑第五版）
+物事を深くよくしらべ考えること。（旺文社国語辞典 ）
+物事の事実を􏰀明らかにし真理を知ること；深く調べ考えること。（常用国語
+辞典 ）
+
+ある特定の物事について、人間の知識を集めて考察し、実験、観察、調査など
+を通して調べて、その物事についての事実を深く追求する一連の過程のことで
+ある。語義としては「研ぎ澄まし究めること」の意。（Wikipedia）
+出典：https://www.pref.shimane.lg.jp/education/kyoiku/kikan/hamada_ec/kenkyu/kiyou_houkoku/kenkyu-no-kenkyu.data/3.pdf
+
+13
+
+「研究」とは
+科学は、合理と実証を旨として営々と築かれる知識の体系であり、
+人類が共有するかけがえのない資産でもある。また、科学研究は、
+人類が未踏の領域に果敢に挑戦して新たな知識を生み出す行為と
+いえる。（日本学術会議 声明「科学者の行動規範」前文
+2006年10月）
+
+科学は人類が共有する学術的な知識と技術の体系であり、科学者
+の研究活動はこの知的資産の外延的な拡張と内包的な充実・深化
+に関わっている。（「日本学術会議憲章」前文 2008年）
+
+14
+
+日本学術会議による「科学者（=研究者）」の定義
+「・・・ここでいう「科学者」とは、所属する機関に関わら
+ず、人文・社会科学から自然科学までを包含するすべての学
+術分野において、新たな知識を生み出す活動、あるいは科学
+的な知識の利活用に従事する研究者、専門職業者を意味す
+る。」
+
+「科学者の行動規範」前文
+
+日本学術会議
+2006年10月
+
+15
+
+研究倫理とは
+「人文・社会科学から自然科学までを包含するすべての
+学術分野において、新たな知識を生み出す活動、ある
+いはその知識の利活用に従事するものが、社会に対し
+て、および、他の研究者に対して行う行為の善悪・正不
+正を判断する基準として、一般に承認されている規範
+の総体。」
+
+16
+
+アウトライン
+1. 研究倫理とは
+2. 責任ある研究活動（Responsible Conduct of
+Research: RCR）の必要性
+3. 予防倫理と志向倫理
+4. 科学技術倫理2.0とwell-beingの科学的検討
+5. 結語：倫理的研究者とwell-being
+17
+
+科学における不正行為の増加
+•「［科学論文の］99.9999%は精密で信頼
+できる」
+•
+
+（引用）R.ベル（井山弘幸訳）：『科学が裁かれるとき』，（化学同人，1994），p. 2．
+
+──とダニエル・コシランド（『サイエンス』誌元
+編集長（1985-95））は言うが．．．本当？？
+↓
+
+• 20世紀後半から不正行為の発覚が急増
+
+18
+
+研究不正の発覚の急増
+Richard Van Noorden. Nature, 478, 26-28 (2011)を基に、市川家國氏が作成
+
+2000年以降に論文撤回数の急増
+
+2000年以降
+の現象です
+
+44%
+
+28%
+
+11%
+
+17%
+
+2009年以降も撤回論文は増加を続けている
+科
+学
+技
+術
+分
+野
+の
+論
+文
+の
+撤
+回
+割
+合
+
+2018年
+約0.07％
+
+2009年
+約0.03％
+
+2000年
+約0.003％
+
+出典：Alison J. Abritis, Adam Marcus, Ivan Oransky, “Supplementary Written Evidence Submitted by Retraction Watch and The Center
+for Scientific Integrity (RRE0097),” 2022 https://committees.parliament.uk/writtenevidence/42152/pdf/
+
+領域では、やはりライフサイエンス
+
+松澤孝明、「わが国における研究不正ー公開情報に基づくマクロ分析(1)−」、
+『情報管理』、vol.56, No. 3., 2013年
+
+21
+
+特定不正行為と認定されると公開されます
+
+文部科学省研究公正推進室 <http://www.mext.go.jp/a_menu/jinzai/fusei/1360839.htm>
+
+22
+
+2016年度までは文系の盗用が多いが・・・
+
+文部科学省研究公正推進室 <http://www.mext.go.jp/a_menu/jinzai/fusei/1360839.htm>
+
+23
+
+2017年度は件数が多く（16件）理工系が増える
+
+文部科学省研究公正推進室 <http://www.mext.go.jp/a_menu/jinzai/fusei/1360839.htm>
+
+24
+
+2018年度はすべて盗用（含む二重投稿）
+
+文部科学省研究公正推進室 <http://www.mext.go.jp/a_menu/jinzai/fusei/1360839.htm>
+
+25
+
+2019年度は文系で特殊な事例が
+
+文部科学省研究公正推進室 <http://www.mext.go.jp/a_menu/jinzai/fusei/1360839.htm>
+
+26
+
+2020年度は医・理工系が中心 医学系で２つの大事件が公表
+
+文部科学省研究公正推進室 <https://www.mext.go.jp/a_menu/jinzai/fusei/1360846.htm>
+
+27
+
+名前は公表されませんが・・・
+
+文部科学省研究公正推進室 <http://www.mext.go.jp/a_menu/jinzai/fusei/1360839.htm>
+
+28
+
+残念ながら、ふたつの世界記録は日本発
+2018年までで、もっとも多く
+引用された撤回論文
+
+http://retractionwatch.com/the-retraction-watch-leaderboard/top-10-most-highly-cited-retracted-papers/
+
+残念ながら、ふたつの世界記録は日本発
+撤回論文数Top 10に5人の日本人
+The Retraction Watch Leaderboard
+
+http://retractionwatch.com/the-retraction-watch-leaderboard/
+
+as of February 17, 2022
+
+日本は研究不正大国？
+
+https://www.sciencemag.org/news/2018/08/researcher-center-epic-fraud-remainsenigma-those-who-exposed-him?r3f_986=http://scienceandtechnology.jp/archives/21149
+March 14, 2019
+
+第5期科学技術基本計画（2016年1月22日）
+「研究の公正性の確保」が明記された！
+
+http://www8.cao.go.jp/cstp/kihonkeikaku/5honbun.pdf
+
+Nov. 30, 2016
+
+科学技術・イノベーション創出の活性化に関する法律
+（平成20年法律第63号）’(2008年）
+
+（研究開発等の公正性の確保等）
+第二十四条の二 研究者等は、研究開発等の公正性の確保及び研究開発等に係る資金の適正な使用に
+ついて第一義的責任を有するものであって、研究開発等に係る倫理に関し知識と理解を深めること等
+を通じて、研究開発等の公正かつ適正な実施に努めるものとする。
+
+２ 研究開発機関は、その研究者等が研究開発等に係る倫理に関する知識と理解を深めるために必要
+な取組を実施するとともに、研究開発等に係る不正行為（資金の不正な使用を含む。次項において同
+じ。）について客観的な根拠に基づき適切に対処するよう努めるものとする。
+
+３ 国は、研究開発等に係る不正行為が科学技術に対する国民の信頼を損なうとともに、科学技術の
+水準の向上を妨げることに鑑み、その防止のための体制の強化その他の研究開発等に係る不正行為の
+防止に必要な施策を講ずるものとする。
+
+そもそも研究不
+正とは何か
+変化する「研究
+不正の」定義
+
+例：米国科学財団（National Science
+Foundation: NSF）による「科学および工
+学における不正」の定義（2002年まで）
+
+「NSFの助成を受ける活動の申請、実施、
+成果報告に際しての、捏造、改竄、剽窃、
+あるいはそのほか容認されている慣習から
+の重大な逸脱。
+あるいは、不正疑惑に関する情報を報告
+あるいは提供し、不誠実な行動をとらな
+かった人に対する、あらゆる種類の報復」
+
+出典：https://www.nsf.gov/oig/regulations/misconduct-defined.jsp
+34
+
+2000年以降の不正（Misconduct）の定義
+“Fabrication, falsification, or plagiarism
+(FFP) in proposing, performing, or
+reviewing research, or reporting research
+results”
+Office of Science and Technology Policy. Federal Research Misconduct Policy. Federal Register. 2000 Dec
+6;65(235):76260–76264.
+
+35
+
+FFPとは?
+
+(C. Whitbeckによる定義)
+
+• 捏造(Fabrication)とは、「研究を提案、実施、報告する際に、デー
+タや実験あるいはその他の重要な情報をでっち上げること」
+• 改竄(Falsification)とは、「データや実験あるいはその他の重要な情
+報、たとえば研究者の資格や業績などを変えたり偽ったりするこ
+と」
+
+• 剽窃(Plagiarism)とは「他の人の仕事あるいはアイディアを自分自身
+のものであると主張すること」
+
+36
+
+「特定不正行為」
+（文部科学省、2014年）
+
+①捏造
+存在しないデータ、研究結果等を作成すること。
+
+②改ざん
+研究資料・機器・過程を変更する操作を行い、データ、研究活動に
+特定不正行為以外の研究活
+よっ て得られた結果等を真正でないものに加工すること。
+動における不正行為（二重投
+③盗用
+稿や不適切なオーサーシップ
+など）が行われたとの報告を
+他の研究者のアイディア、分析・解析方法、データ、研究結果、論
+文又
+は用語を当該研究者の了解又は適切な表示なく流用すること。
+受けた場合も、不正事案に準
+じて対応する。
+文部科学省「研究活動における不正行為への対応等に関するガイドライン」、2014年、p. 10
+
+Harassmentも研究不正？
+
+https://www.nature.com/articles/d41586-018-05076-2
+
+「責任ある研究行為」
+RCR: Responsible Conduct of Research
+
+研究を推進する上で共有されるべき「価値」が体現される
+研究活動
+
+• 「正直さ」（honesty）
+• 「正確さ」（accuracy）
+• 「効率」（efficiency）
+• 「客観性」（objectivity）
+N. H. Steneck, ORI Introduction to the Responsible Conduct of
+Research (2005)
+
+39
+
+「責任ある研究行為」
+RCR: Responsible Conduct of Research
+Six Core Values “that are most influential in shaping the norms that constitute
+research practices and relationships and the integrity of science:”
+• 「客観性」（Objectivity）
+• 「正直さ」（Honesty）
+• 「公開性」（Openness）
+• 「説明責任」（Accountability）
+• 「公平性」（Fairness）
+• 「スチュワードシップ」（Stewardship）
+
+National Academies of Sciences, Engineering, and Medicine 2017. Fostering Integrity in
+Research. Washington, DC: The National Academies Press.
+https://doi.org/10.17226/21896.
+40
+
+「疑わしい研究行為」
+QRP: Questionable Research Practices (Steneck)
+
+RCR
+
+QRP
+
+不正
+
+正直さ
+正確さ
+効率性
+客観性
+
+虚偽情報
+不正確
+バイアス
+不適切なオー
+サーシップ
+Etc.
+
+捏造
+改ざん
+盗用
+41
+
+Areas of
+concern: • Bias design ~ select methods/control that favor results
+
+{
+Conduct {
+Interpret {
+Publish {
+Review {
+Plan
+
+42
+
+• Failure to disclose conflicts of interest
+• Less than honest information to review committees
+ Failure to follow protocols, particularly human subject
+ Improper or inadequate procedures for recording data
+ Inadequate supervision
+ Inappropriate statistical methods
+ Improper selection of data and controls
+ Unjustified or unsupported conclusions
+
+ Honorary and Ghost authorship
+ Misleading and inaccurate notes and abstracts
+ Withhold crucial information
+ Failure to maintain confidentiality
+ Cursory review
+ Bias toward or against particular colleagues or fields
+
+N. Steneck, “What Do We Know? :Two Decades of Research on Research
+Integrity”World Conference on Research Integrity, September 16-19, 2007
+
+疑わしい研究活動（QRP）①
+• 計画（Plan）
+• 偏った研究計画（結果を支持する方法や対照群の選択）
+• 利害相反の非開示
+• 審査委員会に対する不正直な情報提供
+
+• 実施（Conduct）
+• 正式な手順・手続きを踏まない（特に、ヒトを対象とする研究）
+• 不適切な、あるいは、不十分なデータの記録
+• 不十分な監督
+
+疑わしい研究活動（QRP）②
+• 解釈（Interpret）
+• 不適切な統計処理方法
+• 不適切なデータや対照群の選択
+• （データなどにより）正当化されない、あるいは、支持されない結論
+
+• 発表・出版（Publish）
+• 不適切なオーサーシップ
+• 不正確な、あるいは誤解を招く注や要約
+• 重要な情報の隠蔽（非開示）
+
+疑わしい研究活動（QRP）③
+• 査読・審査（Review）
+• 守秘義務違反
+• ぞんざいな査読・審査
+• 特定の研究者あるいは分野に対するバイアス（偏向）
+
+General findings
+Misconduct ~ 0.1% <–> 1%
+
+Research behavior
+
+Questionable Research Practices ~ 10% <–> 50%
+
+46
+
+High or highest
+standards for integrity
+in research
+
+N. Steneck, “What Do We Know? :Two Decades of Research on Research
+Integrity,” World Conference on Research Integrity, September 16-19, 2007
+
+なぜ研究不正やQRPは起こるこか
+不正への誘惑の増加と社会構造／研究環境の変化
+競争の激化
+ 過剰な業績主義
+ 研究費獲得競争
+ 計画書・報告書の誇大表現
+共同研究の増加
+ 各組織の思惑が絡み，研究が歪められる
+情報処理技術の急速な発展
+ FFPをはじめとする不正行為の容易化（不正を暴くのも容易に）
+47
+
+何故、不正行為は起こるのか（米国の場合）
+Paul G. Braunschweiger （University of Miami、Co-Founder of the CITI Program）
+
+• 精神的な問題
+• 研究成果を生み出すことへのプレッシャー
+• お金（！）
+• 不十分・不適切な研究者指導・育成体制
+• ルールの無知
+• 倫理的分析・意思決定能力の低さ
+• 意思力
+• 倫理的基準に関する文化的な差
+
+• それ故、研究倫理教育が必要である
+48
+
+加えて、日本の場合は
+競争的資金の急激な増加
+
+大学院重点化による「研究者」の増大
+業績至上主義
+
+一時的なポストの増大
+流動性の低さ
+「Inbreeding」
+49
+
+科研費予算額の推移
+
+出典：https://www.jsps.go.jp/j-grantsinaid/27_kdata/data/1-1/1-1_r1.pdf
+
+研究不正行為が社会に大きな影響を与える
+ 高度科学技術社会における科学・技術の不正行為の意味
+
+• 他者への危害の可能性
+• 貴重なマンパワーと時間の浪費
+• 大きな経済的損失
+• 科学者・技術者と我々の信頼関係の崩壊
+• 我々の生存を脅かす可能性も
+‖
+
+高度科学技術社会の土台・基盤を揺るがす
+‖
+
+この社会が崩壊しかねない
+
+RCR関連活動の世界的動向
+1990年代から研究不正（Research Misconduct）に関する関心が
+世界各国で高まった。（メディアに取り上げられる事件の急
+増） 研究不正「防止」への取り組みが始まる。
+• アメリカ：1980年代から取り組みを始める。1992年公衆衛生庁（PHS）に研究
+公正局（ORI）。
+• ドイツ：「ヘルマン・ブラッハ事件」（1997年）を契機にDFG（ドイツ研究振
+興協会）は、1998年に「学術研究における善き実践の確保」と題した提言を発
+表。（2013年に補遺）これを受け、「ドイツ大学長会議」はモデル・ガイドラ
+インを策定し、機関毎のルール作りが始まる。2011年、2013年に大臣の博士論
+文盗用事件。
+• その他の国々でも：デンマーク、スウェーデン、オランダ、中国、韓国、オー
+ストラリア、英国等々
+52
+
+健全な研究（公正研究）への取り組み
+様々なグローバルな取り組みも始まる
+
+• UNESCO/ICUS
+• 「科学と科学的知識の利用に関する世界宣言」（1999年）
+• 学術雑誌編集団体による取り組み
+• 例えば、出版規範委員会<Committee on Publication Ethics:COPE>, 国際科学編集者協議会
+<CSE>、国際医学雑誌編集者委員会<ICMJE>等
+• World Conference on Research Integrity（WCRI）
+•
+
+第1回リスボン（2007年）、第2回シンガポール（2010年）、第3回モントリオール（2013年）、第4回リオデ
+ジャネイロ（2015年）、第5回アムステルダム（2017年）、第6回香港（2019年）、第7回ケープ・タウン
+（2022年）、第8回場所未定?、第9回東京？（2026年）
+
+• Asia Pacific Research Integrity Network Meeting（APRI）
+•
+
+第1回サンディエゴ（2015年）、第2回香港（2016年）、第3回台北（2018年）、第4回ソウル（2021年）、
+第5回東京（早稲田）（2023年）
+
+• OECD Global Science Forum (2007, 2008, 2008）
+• ESF/AAEA(All European Academies)
+• The European Code of Conduct for Research Integrity（2011, 2017）
+
+53
+
+日本学術会議の責任ある研究活動に関する活動
+2000年前後
+
+「学術と社会常置委員会」
+
+2003年6月
+
+対外報告「科学における不正行為とその防止について」
+
+2005年７月
+
+対外報告「科学におけるミスコンダクトの現状と対策―科
+学者コミュニティの自律に向けて―」
+
+2005年10月
+
+「科学者の行動規範に関する検討委員会」
+
+2006年10月
+
+声明「科学者の行動規範」
+
+2013年1月
+
+声明「科学者の行動規範-改訂版-」
+
+2013年12月
+
+提言「研究活動 における不正の防止策と事後措置-科学の
+健全性向上のために-」
+
+2014年8月
+
+文部科学大臣決定「研究活動における不正行為への対応等
+に関するガイドライン」
+
+2015年3月
+
+回答 「科学研究における健全性の向上について」
+54
+
+日本学術会議 声明 科学者の行動規範
+2006年10月3日
+
+• はじめに
+• 「科学者の行動規範」
+• 科学者の行動規範の自律的実現を目指して
+http://www.scj.go.jp/ja/info/kohyo/pdf/kohyo-20-s3.pdf
+
+2013年1月に改定
+55
+
+科学と科学研究の目的とは
+（1999年ブダペスト宣言に基づき）
+
+（前文）
+（略）科学と科学研究は社会と共に、そして社会
+のためにある。したがって、科学の自由と科学者
+の主体的な判断に基づく研究活動は、社会からの
+信頼と負託を前提として、初めて社会的認知を得
+る。
+56
+
+「科学者の行動規範」(2006)
+• 前文（「科学は社会と共に、社会のためにある。」←”Science in
+Society and for Society”）
+• 11箇条
+1（科学者の責任）
+
+7（法令の遵守）
+
+2（科学者の行動）
+
+8（研究対象などへの配慮）
+
+3（自己の研鑽）
+
+9（他者との関係）
+
+4（説明と公開）
+
+10（差別の排除）
+
+5（研究活動）
+
+11（利益相反）
+
+6（研究環境の整備）
+57
+
+科学者の行動規範(2006)
+（科学者の基本的責任）
+1. 科学者は、自らが生み出す専門知識や技術の質を担
+保する責任を有し、さらに自らの専門知識、技術、
+経験を活かして、人類の健康と福祉、社会の安全と
+安寧、そして地球環境の持続性に貢献するという責
+任を有する。
+
+58
+
+アウトライン
+1. 研究倫理とは
+2. 責任ある研究活動（Responsible Conduct
+of Research: RCR）の必要性
+3. 予防倫理と志向倫理
+4. 科学技術倫理2.0とwell-beingの科学的検討
+5. 結語：倫理的研究者とwell-being
+59
+
+二つの倫理
+志向倫理
+（Aspirational Ethics）
+
+予防倫理
+（Preventive Ethics）
+
+側面
+
+善・正
+
+悪・不正
+
+目的
+
+優れた意思決定と行動（Good
+Works）を促す
+
+やってはならないことや
+守るべきことを示す
+
+方向
+
+福利（well-being）への貢献
+
+安全・健康の確保
+
+傾向
+
+外向き
+
+内向き
+
+効果
+
+鼓舞・動機付け
+
+萎縮
+60
+
+スペースシャトル・
+プログラム
+
+ 廉価（部品は出
+来るだけ再利
+用）に，頻繁
+（年50回）に，
+機材（人工衛星
+など）を大気圏
+外に送り出すた
+めの計画
+
+Credits: NASA
+
+https://www.nasa.gov/topics/technology/features/tdrs-era.html
+
+事例：スペースシャトル・チャレンジャー号爆発事故
+
+Credits: NASA
+
+https://commons.wikimedia.org/wiki/File:Challenger_explosion.jpg
+
+チャレンジャー号の乗組員
+
+Credits: NASA
+
+https://www.nasa.gov/multimedia/imagegallery/image_feature_256.html
+
+危険性を訴えていたエンジニア
+Roger Bouisjoly (1938–2012)
+
+https://en.wikipedia.org/wiki/Roger_Boisjoly
+
+二つの倫理
+志向倫理
+（Aspirational Ethics）
+
+予防倫理
+（Preventive Ethics）
+
+側面
+
+善・正
+
+悪・不正
+
+目的
+
+優れた意思決定と行動（Good
+Works）を促す
+
+やってはならないことや
+守るべきことを示す
+
+方向
+
+福利（well-being）への貢献
+
+安全・健康の確保
+
+傾向
+
+外向き
+
+内向き
+
+効果
+
+鼓舞・動機付け
+
+萎縮
+65
+
+倫理学
+
+「べきである」（価値判断）の
+根本を探る学問
+
+不正はすべきでない
+
+正しいことはすべき
+
+賄賂はもらうべきでない
+
+社会に貢献すべき
+
+改ざんはすべきでない
+
+責任は果たすべき
+
+隠蔽はすべきでない
+
+人々を幸せにするべき
+
+ねつ造はすべきでない 研究者は幸せになるべき
+
+Preventive Ethics Aspirational Ethics
+出典：
+
+慶應義塾大学前野隆司先生作成のスライドを改変
+
+66
+
+いろんな研究者の行動
+（正規分布）
+
+悪い行動
+
+よい行動
+
+普通の行動
+出典：
+
+慶應義塾大学前野隆司先生作成のスライドを改変
+
+67
+
+予防倫理は
+悪い行動を
+なくす
+ための倫理
+
+出典：
+
+慶應義塾大学前野隆司先生作成のスライドを改変
+
+悪
+不祥事、不正
+（捏造、
+改ざん、盗用）
+
+この線より下はOUT
+
+68
+
+予防倫理は
+悪い行動をして
+しまう研究者を
+引っ張り上げる
+ための倫理
+
+悪
+
+志向倫理は
+研究者がさらによい行動、
+より善い社会を
+創っていく
+ための
+倫理
+
+善
+社会貢献、大義、責任、
+世界の幸せ、研究者の幸せ
+出典：
+
+慶應義塾大学前野隆司先生作成のスライドを改変
+
+ネガティブな倫理
+ポジティブな倫理
+おもしろくはないが
+元気と勇気と
+責任上、やらな
+やる気が
+ければならない
+あふれる
+
+善
+
+悪
+不祥事、不正
+（捏造、
+改ざん、盗用）
+
+この線より下
+はOUT
+出典：
+
+社会貢献、大義、責任、
+世界の幸せ、研究者の幸せ
+慶應義塾大学前野隆司先生作成のスライドを改変
+
+アウトライン
+1. 研究倫理とは
+2. 責任ある研究活動（Responsible Conduct of
+Research: RCR）の必要性
+3. 予防倫理と志向倫理
+4. 科学技術倫理2.0とwell-beingの科学的検討
+5. 結語：倫理的研究者とwell-being
+71
+
+「技術者倫理1.0」が持つ２つの問題
+• 伝統的責任モデルの限界
+• 予防倫理のネガティブな側面：技術者は、安全と健康を守るためだけ
+に技術者になろうとするのではない。
+• 科学技術で人類に貢献する側面を忘れさせる。
+• 「福利」に関する科学的検討の欠如
+
+• 「行為」に注目する倫理の「倫理的統合失調症」問題（「行為
+者」や「動機」の軽視）
+• 「行為」に注目する義務論と「結果」に注目功利主義の対立 M. Stoker,
+“The Schizophrenia of Modern Ethical Theories,” The Journal of Philosophy, Vol. 73, No. 14 (1976), pp.
+453-466
+
+代表的な倫理学理論
+ 一般に，「行為者」が「行為」することに
+よって何らかの「結果」が生じる
+
+行為者
+
+→
+
+行為
+
+→
+
+結果
+
+徳倫理学 義務倫理学 功利主義
+
+73
+
+科学技術倫理の新しい
+モデル
+「伝統的」責任モデルを超えて
+↓
+「科学技術倫理 2.0」へ
+
+技術者倫理の基本原則
+基本憲章1
+「エンジニアは、その専門職能上の職務を遂行す
+るにあたり、公衆の安全、健康、福利を最優先し
+なければならない。」
+
+75
+
+技術者倫理の基本原則
+基本憲章1
+「エンジニアは、その専門職能上の職務を遂行するに
+あたり、公衆の安全、健康、福利を最優先しなければ
+ならない。」
+
+福利（welfare/well-being)って何？
+76
+
+早稲田大学学術研究倫理憲章
+早稲田大学は、「学の独立」および「進取の精神」という建学の精神に則り、
+学問の使命に対する高い理想を持ち、学術研究活動を通じて、人類の福祉
+と世界平和に貢献する。学術研究に関与する者は、それが人間、社会およ
+び自然環境に多大な影響を及ぼすことに鑑み、本学が受け継いできた良き
+伝統を堅持しつつ、常に良心に従って自己研鑽に努め、現代社会の今日的
+課題にも果敢に挑戦する。＜略＞
+
+1. 本学の学術研究は、人類の福祉や世界平和など、人類共通の課題に貢
+献する。
+2. 〜6. ＜略＞
+
+77
+
+日本学術会議「科学者の行動規範」
+（科学者の基本的責任）
+1 科学者は、自らが生み出す専門知識や技術の質を担保
+する責任を有し、さらに自らの専門知識、技術、経験を活か
+
+して、人類の健康と福祉、社会の安全と安寧、そして地
+球環境の持続性に貢献するという責任を有する。
+
+78
+
+科学技術（学術研究）倫理の基本原則
+人類の福祉（well-being/welfare）に貢献すると
+いう責任を有する。
+「科学と科学的知識の利用に関する宣言」
+（ICSU/UNESCO, 1999）
+
+Science in Society and Science for Society
+79
+
+「アテネの学堂」
+（ラファエロ・サンティ、1509-1510）
+
+中心に描かれるふたりの人物は？
+
+倫理とは「よく生きる（well-being）」ことについての考察
+”To resume, inasmuch as all studies and undertakings are
+
+directed to the attainment of
+some good, let us discuss
+εὐδαιμονία
+what it is that we pronounce to be the aim of Politics, that
+(wellbeing/flourishing/prosperity/
+is, what
+is the highest of all the goods that action can
+achieve. As far as thehappiness)
+name goes, we may almost say that
+the great majority of mankind are agreed about this; for
+both the multitude and persons of refinement speak of it
+as eudaimonia, and conceive ‘the good life’ or ‘doing well’
+to be the same thing.”
+（アリストテレス、『ニコマコス倫理学』,§21; 1095a15–22）
+
+｢よく生きる（幸せ）｣？
+「為しうるすべてのよいもののうちで最上位のも
+のとは何であるのか。・・・その名称の点では意
+見は一致している。一般大衆も立派な人々もそ
+れを「幸福（eudaimonia）と呼び、「よい人生を送
+ること」や「立派にやっていくこと」を「幸福である
+こと」と同じものと考えている・・・。」（最高善）
+（アリストテレス、『ニコマコス倫理学』、§21; 1095a15–22、渡辺邦夫・立花
+幸司訳）
+
+幸福追求権は包括的基本人権である
+• 日本国憲法１３条
+「すべて国民は、個人として尊重される。生命、自由
+及び幸福追求に対する国民の権利については、公共
+の福祉に反しない限り、立法その他の国政の上で、最
+大の尊重を必要とする。」
+
+あなたは、「幸せ」ですか？
+
+Jill WellingtonによるPixabayからの画像
+
+Ian IngalulaによるPixabayからの画像
+denkendewolkeによるPixabayからの画像
+
+Well-being:世界的に注目されてはじめている
+
+Source: Peggy Kern, Presentation in Kanazawa, 2014
+
+OECD Better Life Index （Well-being
+Indicators）による日本
+
+＜住宅＞、＜収入＞、＜雇用＞、＜教育＞、＜
+環境＞、＜ガバナンス＞、＜健康＞、＜安心、
+安全＞では、平均か平均以上
+＜人生満足度＞
+・0-10のスケールで5.9
+（ＯＥＣＤ平均6.5 加盟38カ国中29位）
+
+イースタリンのパラドックス
+
+出典：内閣府『平成20年度国民生活白書』、p. 54
+
+自殺者数の年度推移
+
+出典：https://www.mhlw.go.jp/wp/hakusyo/jisatsu/16/dl/1-01.pdf
+
+89
+
+「これからは心の豊かさか、物の豊かさか」
+こころの豊かさ
+
+客観的well-being要素
+（≒地位財）よりも
+物の豊かさ
+
+主観的well-being要素
+（≒非地位財）
+1980
+
+1990
+
+2000
+
+2011
+
+では、何があなたを幸せにするのか？
+（Time, Jan. 2005）
+
+子供との関係（77%）
+友達・友情（76%）
+他者への貢献（75%）
+伴侶との関係（74%）
+
+Martin P. Seligman （1942- ）
+
+出典：https://ja.wikipedia.org/wiki/マーティン・セリグマン
+
+ポジティブ心理学とは何か？
+•個人やコミュニティが、「繁栄する」ために必要
+な要因を発見し、促進することを目的とする、最
+適機能に関する「科学的研究」
+（ “The scientific study of optimal functioning that
+aims to discover and promote factors that allow
+individuals and communities to thrive”）
+Source: Peggy Kern, Presentation in Kanazawa, 2014
+
+病理モデルから幸福モデルへ
+DSM: Diagnostic and
+statistical manual of mental
+disorder （米国精神医学
+会、1994）
+
+CSV: Character strengths and
+Virtue: A handbook and
+classification (Peterson &
+Seligman, 2004)
+
+• 人間の心理学的な障害
+や機能低下に関する診
+断マニュアル
+
+• 人間の持つ優れた特性
+に関する診断マニュア
+ル
+• ６つの徳目（virtues）と品性的強さ（character strengths）
+に分類している。 知恵と知識（wisdom and knowledge）、
+勇気（courage）、人間性（humanity）、正義（justice）、
+節度（temperance），超越性（transcendence）という６つ
+の徳目とその下に分類される24の強さ（品性）（例えば、
+独創性、向学心、誠実性、勤勉、公平性、謙虚、慎重な
+ど）
+
+2011年、UNは、3月20日を
+the International Day of Happiness に!!!!!
+
+UN Ranking of Happiness: 2010-12
+日本は43位！ １位はデンマーク
+
+UN Ranking of Happiness: 2016-18
+日本は58位！ １位はフィンランド （WHR2019, p. 21）
+
+UN Ranking of Happiness: 2016-18
+Japan is the 58st！ Finland is the top.
+
+（WHR2019, p. 21）
+
+Harvard Univ.で最も人気のある科目は？
+
+https://positivepsychologyprogram.com/harvard-positive-psychology-course-1504/
+
+Yale Univ.でも最も人気のある科目は？
+“Yale University’s New Course on Happiness Is So Popular That 25 Percent of Its Student
+Enroll.”
+(https://www.inc.com/bill-murphy-jr/yales-super-popular-course-on-happiness-makes-other-professors-sad-so-theyre-not-going-toteach-it-anymore.html)
+
+“Yale’s Most Popular Class Ever: Happiness”
+(https://www.nytimes.com/2018/01/26/nyregion/at-yale-class-on-happiness-draws-huge-crowd-laurie-santos.html)
+
+“Top colleges like Yale are teaching student to priotize happiness-not money and power”
+(https://qz.com/1192880/harvard-yale-and-other-other-top-universities-are-teaching-students-a-new-skill-happiness/)
+
+「幸せ」を得るためには？（大きな誤解？）
+
+幸せ？
+
+目標達成（成功）
+
+目標→努力
+
+https://www.dreamstime.com/stock-photo-business-concept-businessman-running-hamster-wheel-image85736909
+
+ポジティブ心理学が明らかにした科学的事実
+
+成功するから
+幸せになるのではない。
+幸せだから成功するのだ。
+
+Well-beingとは
+•
+
+Well-beingに関する科学的研究は急速に発展し、多くの知
+見を生み出している。
+• しかしながら、ポジティブ心理学が生まれて、まだ、20年
+ほどなので、「well-beingとは何か」という問いに対する
+絶対的な答えはない。
+• 様々な理論が乱立している。（例）
+Carol Ryff: Psychological Well-being
+Corey Keyes: Flourishing
+Tom Rath: Holistic Well-being
+
+ウェルビーイングは構成概念
+
+P: Positive Emotion
+
+The PERMA
+Model
+
+E: Engagement
+R: Positive Relationships
+
+(Seligman,2011)
+
+M: Meaning
+A: Accomplishment/Achievement
+
+科学技術倫理2.0
+科学技術倫理の基本原則と「well-being」
+科学技術倫理の基本原則
+
+「公衆の安全、健康、福利（well-being）への貢献」
+
+科学的事実：個人のwell-being：Meaning:自分よりも大きなもののために仕事をし、貢献
+できることにより、最も大きなかつ長続きする「主観的Well-being」を得ることができる。
+
+すなわち、科学技術者は倫理的に仕事をすることにより社会に福利をもたらすとともに、自分自
+身も「幸せになる（よく生きる）」ことができる。
+
+科学技術の目的
+IEEE: 世界最大の技術系学会 会員数約43万人
+最新（2019年）の報告書：
+Ultimately, our goal should
+, a practice
+EthicallybeAligned Design: A Vision
+for Prioritizing
+Human
+Well-being
+with Autonomous and
+elucidated by Aristotle
+that defines
+human
+Systems
+well-being, both atIntelligent
+the individual
+and collective level, as the highest
+virtue for a society. Translated
+Principle
+2-Well-being
+roughly as “flourishing”,
+the benefits
+of eudaimonia begin with
+A/IS creators
+conscious contemplation,
+where shall adopt
+increased
+humanhow
+well-being
+ethical considerations
+help us define
+we wishas
+to live.
+a primary success criterion for
+development.
+
+eudaimonia
+
+The IEEE Global Initiative on Ethics of Autonomous and Intelligent Systems.
+Ethically Aligned Design: A Vision for Prioritizing Human Well-being with
+Autonomous and Intelligent Systems, First Edition. IEEE, 2019.
+https://standards.ieee.org/content/ieee-standards/en/industryconnections/ec/autonomous-systems.html
+
+科学技術の新しい方向性
+R. A. Calvo and D. Peters, Positive Computing:
+
+Technology for Wellbeing and Human Potential,
+the MIT Press, 2014.
+
+科学技術の目的
+National Academies of Sciences, Engineering, and
+Medicine 2017. Human Genome Editing: Science,
+Ethics, and Governance. Washington, DC: The National
+Academies Press.
+OVERARCHING PRINCIPLES FOR GOVERNANCE OF
+HUMAN GENOME EDITING
+1. Promoting well-being
+2. Transparency
+3. Due care
+4. Responsible science
+5. Respect for persons
+6. Fairness
+7. Transnational cooperation
+
+科学技術の目的
+
+科学者が科学の実施・適用を、integrityをもち、人類の利
+益と幸福のため、人権を尊重して行う責任を認識。
+知識の拡大、普遍的な幸福の促進、環境・社会・経済的な
+課題への対応、科学的後 進国のニーズへの対応のため
+に科学を活かすよう、科学・助成政策の見直しを要請。
+社会・経済、環境上の期待に直ちには応えないかもしれな
+い研究を、研究者が計 画・実施する自由を認める。
+
+https://worldscienceforum.org/contents/declaration-of-world-scienceforum-2019-110073
+
+科学技術（人文・社会科学を含む）の目的
+第6期科学技術・イノベーション基本計画
+（令和3年3月26日閣議決定）
+我が国が目指すべき Society 5.0 の未来社会像:
+「持続可能性と強靭性を備え、国民の安全と安心を確保
+するとともに、一人ひとりが多様な幸せ （well-being）
+を実現できる社会」（p. 3)
+
+Source:
+https://www8.cao.go.jp/cstp/kihonkeikaku/6honbun.pdf
+
+アウトライン
+1. 研究倫理とは
+2. 責任ある研究活動（Responsible Conduct of
+Research: RCR）の必要性
+3. 予防倫理と志向倫理
+4. 科学技術倫理2.0とwell-beingの科学的検討
+5. 結語：倫理的研究者とwell-being
+111
+
+結語１
+倫理とは、「幸せ」（well-being）、すなわち、「よく生
+きる」ために何を為すべきかと考え、実行することである。
+倫理（特に志向倫理）的な知識と判断能力は、科学者（人
+文社会科学系を含むすべての研究者）にとって「周辺」的
+能力（アプリ）ではなく、自己の存在意義にかかわる中核
+的資質・能力（OS）である。
+
+112
+
+結語２
+• 学術研究倫理の基本原則は「人類の福利への貢献」であり、
+また、ポジティブ心理学の科学的知見によれば、「意義のあ
+る（meaningful)」な仕事（自分よりも大きなもののために
+仕事をし、貢献できること）により、最も大きなかつ長続き
+する主観的な「幸せ」を得ること（well-beingを高めるこ
+と）ができる。
+
+• すなわち、科学者（研究者）は、倫理的に研究をすることに
+より社会に福利（well-being）をもたらすとともに、科学
+者（研究者）自身も「よく生きる」ことができる。
+
+
