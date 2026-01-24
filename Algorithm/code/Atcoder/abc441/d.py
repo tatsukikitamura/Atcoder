@@ -11,3 +11,4 @@ visited = set()
 stack = [1]
 
 while stack:
+    break

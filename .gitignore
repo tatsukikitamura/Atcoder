@@ -16,7 +16,7 @@ __pycache__/
 /Algorithm/code/job 
 .DS_Store
 .clangd
-/venv/
+.venv/
 *in
 tools*/
 solver

@@ -1,5 +1,6 @@
 {
   "python.defaultInterpreterPath": "python3",
+  "python.terminal.activateEnvironment": false,
   "files.autoSave": "afterDelay",
   "editor.formatOnSave": false,
   "editor.codeActionsOnSave": {
