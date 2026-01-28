@@ -606,11 +606,7 @@ public:
     }
     
     // ===== ヘルパー関数（既存） =====
-    int calc_insertion_cost(const Pos& o_s, const Pos& o_e, const Pos& i_s, const Pos& i_e) {
-        int d_total = manhattan_dist(o_s, i_s) + manhattan_dist(i_s, i_e) + manhattan_dist(i_e, o_e);
-        int d_base = manhattan_dist(o_s, o_e) + manhattan_dist(i_s, i_e);
-        return d_total - d_base;
-    }
+
     
     vector<pair<int, bool>> find_proximity_group(int main_card, bool main_visit_first, 
                                      const vector<bool>& used, int max_depth = 3) {
@@ -627,6 +623,11 @@ public:
             int best_inner = -1;
             int min_insertion_cost = INF;
             bool best_inner_visit_first = true;
+            
+            // ループ内で不変な値を事前に計算
+            // calc_insertion_cost = (dist(S, p_in) + dist(p_in, p_out) + dist(p_out, E)) - (dist(S, E) + dist(p_in, p_out))
+            //                     = dist(S, p_in) + dist(p_out, E) - dist(S, E)
+            int base_dist = manhattan_dist(current_start, current_end);
 
             for (int card = 0; card < NUM_CARDS; card++) {
                 if (used[card]) continue;
@@ -635,8 +636,10 @@ public:
                 Pos p1 = input.card_pos[card].first;
                 Pos p2 = input.card_pos[card].second;
                 
-                int cost1 = calc_insertion_cost(current_start, current_end, p1, p2);
-                int cost2 = calc_insertion_cost(current_start, current_end, p2, p1);
+                // cost1: enter p1, exit p2
+                int cost1 = manhattan_dist(current_start, p1) + manhattan_dist(p2, current_end) - base_dist;
+                // cost2: enter p2, exit p1
+                int cost2 = manhattan_dist(current_start, p2) + manhattan_dist(p1, current_end) - base_dist;
                 
                 if (cost1 < min_insertion_cost) {
                     min_insertion_cost = cost1;
