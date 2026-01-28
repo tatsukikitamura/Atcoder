@@ -1,19 +1,17 @@
 import math
-ans = []
+
 N = 10**7
-li = set()
-for z in range(1,N):
-    count = 0
-    square = math.sqrt(z)
-    use = int(square // 1)
-    li.add(z**2)
-    for x in range(1,use+1):
-        if (z**2 - x**2) in li:
-            count += 1
-    
-    if count == 1:
-        ans.add(z)
-    print(z)
+count = [0] * (N + 1)
 
-print(li)
+# x < y を満たす全ペアを列挙
+for x in range(1, int(math.sqrt(N)) + 1):
+    for y in range(x + 1, int(math.sqrt(N - x*x)) + 1):
+        s = x * x + y * y
+        if s <= N:
+            count[s] += 1
 
+ans = [i for i in range(1, N + 1) if count[i] == 1]
+
+# 提出用コードを生成
+print(f"good = {ans}")
+print(f"# 個数: {len(ans)}")
