@@ -1,6 +1,7 @@
 #pragma GCC optimize("O3")
 #pragma GCC optimize("unroll-loops")
-// #pragma GCC target("avx2")  // x86のみ。AtCoder提出時は有効化
+
+
 #include <iostream>
 #include <vector>
 #include <string>
@@ -13,11 +14,8 @@
 #include <bitset>
 using namespace std;
 
-
 // ===== Constants =====
 constexpr int N = 20;
-constexpr int NN = N * N;           // 400
-constexpr int NUM_CARDS = NN / 2;   // 200 (カード数)
 constexpr int INF = 1e9;
 
 // ===== Timer =====
@@ -25,7 +23,7 @@ struct Timer {
     chrono::high_resolution_clock::time_point start;
     double limit;
     
-    Timer(double limit_sec = 1.98) : limit(limit_sec) {
+    Timer(double limit_sec = 1.95) : limit(limit_sec) {
         start = chrono::high_resolution_clock::now();
     }
     
@@ -36,34 +34,6 @@ struct Timer {
     
     bool is_over() const {
         return elapsed() >= limit;
-    }
-};
-
-// ===== Random =====
-struct XorShift {
-    unsigned int x = 123456789;
-    unsigned int y = 362436069;
-    unsigned int z = 521288629;
-    unsigned int w;
-    
-    XorShift(unsigned int seed = 42) : w(seed) {}
-    
-    inline unsigned int next() {
-        unsigned int t = x ^ (x << 11);
-        x = y; y = z; z = w;
-        return w = (w ^ (w >> 19)) ^ (t ^ (t >> 8));
-    }
-    
-    inline int nextInt(int n) {
-        return next() % n;
-    }
-    
-    inline double nextDouble() {
-        return next() * 2.3283064365386963e-10; // 1 / 2^32
-    }
-    
-    inline unsigned int operator()() {
-        return next();
     }
 };
 
@@ -79,17 +49,17 @@ struct Pos {
 // ===== Input =====
 struct Input {
     int board[N][N];
-    pair<Pos, Pos> card_pos[NUM_CARDS];
+    pair<Pos, Pos> card_pos[N * N / 2];
     
     void read() {
         int n;
         if (!(cin >> n)) return;
-        vector<bool> first_seen(NUM_CARDS, true);
+        vector<bool> first_seen(N * N / 2, true);
         for (int i = 0; i < N; i++) {
             for (int j = 0; j < N; j++) {
                 cin >> board[i][j];
                 int card = board[i][j];
-                if (card < 0 || card >= NUM_CARDS) {
+                if (card < 0 || card >= N * N / 2) {
                     cerr << "[ERROR] Invalid card value at (" << i << "," << j << "): " << card << endl;
                     exit(1);
                 }
@@ -104,8 +74,7 @@ struct Input {
     }
 };
 
-
-
+// ===== Utility Functions =====
 int manhattan_dist(const Pos& a, const Pos& b) {
     return abs(a.r - b.r) + abs(a.c - b.c);
 }
@@ -146,7 +115,7 @@ public:
     int best_move_count;
     
     vector<bool> used;
-    XorShift rng;
+    mt19937 rng;
     
     struct Candidate {
         int card;
@@ -156,11 +125,8 @@ public:
     vector<Candidate> candidates;
     
     Solver() : best_move_count(INF), rng(42) {
-        used.resize(NUM_CARDS);
-        candidates.reserve(NN);
-        // BFS用変数の初期化
-        for(int i=0; i<N; i++) for(int j=0; j<N; j++) bfs_visit[i][j] = 0;
-        fill(card_seen, card_seen + NUM_CARDS, 0);
+        used.resize(N * N / 2);
+        candidates.reserve(N * N);
     }
     
     void solve() {
@@ -170,8 +136,7 @@ public:
         double phase1_time = 1.5;  // 1.0秒（探索を多めに）
         int iteration = 0;
         
-        while (true) {
-            if (iteration % 100 == 0 && timer.elapsed() >= phase1_time) break;
+        while (timer.elapsed() < phase1_time) {
             bool deterministic = (iteration == 0);
             Solution sol = build_solution(deterministic);
             
@@ -197,15 +162,9 @@ public:
         // 最良解を保存
         Solution current_solution = best_solution;
         
-        double elapsed = phase2_start;
-        
-        while (true) {
-            if (ls_iterations % 100 == 0) {
-                elapsed = timer.elapsed();
-                if (elapsed >= phase2_end) break;
-            }
+        while (!timer.is_over()) {
             // 温度計算
-            double progress = (elapsed - phase2_start) / (phase2_end - phase2_start);
+            double progress = (timer.elapsed() - phase2_start) / (phase2_end - phase2_start);
             progress = min(1.0, max(0.0, progress));
             double temp = t0 * pow(t1 / t0, progress);
             
@@ -229,12 +188,7 @@ public:
         output();
     }
     
-    // BFS用変数
-    int bfs_visit[N][N];
-    int bfs_token = 0;
-    int card_seen[NUM_CARDS];
-    int card_token = 0;
-
+    // ===== 解を構築（構造を返す） =====
     Solution build_solution(bool deterministic) {
         Solution sol;
         sol.groups.clear();
@@ -242,78 +196,48 @@ public:
         
         fill(used.begin(), used.end(), false);
         Pos current_pos(0, 0);
-        int remaining = NUM_CARDS;
+        int remaining = N * N * 0.5;
         
-        // BFS用キューを確保（再利用）
-        static queue<pair<Pos, int>> q; 
-
         while (remaining > 0) {
             candidates.clear();
             
-            // BFSで近い順に候補を探す (上位4件 + α 見つかるまで)
-            while (!q.empty()) q.pop();
-            q.push({current_pos, 0});
-            
-            bfs_token++;
-            card_token++;
-            
-            bfs_visit[current_pos.r][current_pos.c] = bfs_token;
-            
-            int K = 4;
-            int found_count = 0;
-            
-            // 4方向の移動ベクトル
-            const int dr[] = {0, 0, 1, -1};
-            const int dc[] = {1, -1, 0, 0};
-
-            while (!q.empty()) {
-                auto [curr, dist] = q.front();
-                q.pop();
+            for (int card = 0; card < N * N*0.5; card++) {
+                if (used[card]) continue;
                 
-                // このマスのカードをチェック
-                int card = input.board[curr.r][curr.c];
-                if (!used[card] && card_seen[card] != card_token) {
-                    card_seen[card] = card_token;
-                    
-                    // first/second どちらが近いかは、今出会ったのがどっちかで判定
-                    bool visit_first = (curr == input.card_pos[card].first);
-                    candidates.push_back({card, visit_first, dist});
-                    found_count++;
-                }
-
-                if (found_count >= K) break; // 十分な数が見つかったら終了
-
-                // 隣接マスへ
-                for (int i = 0; i < 4; i++) {
-                    int nr = curr.r + dr[i];
-                    int nc = curr.c + dc[i];
-                    
-                    if (nr >= 0 && nr < N && nc >= 0 && nc < N) {
-                        if (bfs_visit[nr][nc] != bfs_token) {
-                            bfs_visit[nr][nc] = bfs_token;
-                            q.push({Pos(nr, nc), dist + 1});
-                        }
-                    }
-                }
+                Pos p1 = input.card_pos[card].first;
+                Pos p2 = input.card_pos[card].second;
+                
+                int cost1 = manhattan_dist(current_pos, p1);
+                int cost2 = manhattan_dist(current_pos, p2);
+                
+                bool visit_first = (cost1 <= cost2);
+                int cost = min(cost1, cost2);
+                
+                candidates.push_back({card, visit_first, cost});
             }
             
             if (candidates.empty()) break;
             
-            // BFSなので既に距離順に並んでいる -> partial_sort不要
+            // 上位K件だけ部分ソート
+            int K = 4;
+            int sort_count = min((int)candidates.size(), K);
+            partial_sort(candidates.begin(), candidates.begin() + sort_count, candidates.end(), 
+                [](const Candidate& a, const Candidate& b) {
+                    return a.cost < b.cost;
+                });
             
             Candidate best = candidates[0];
             if (!deterministic) {
                 int range = min((int)candidates.size(), K);
                 double T = 1.5;
-                // スタック上に確保して動的確保を回避
-                double weights[4]; 
+                vector<double> weights(range);
                 double sum_weights = 0.0;
                 int min_cost = candidates[0].cost;
                 for (int i = 0; i < range; i++) {
                     weights[i] = exp(-(candidates[i].cost - min_cost) / T);
                     sum_weights += weights[i];
                 }
-                double r = rng.nextDouble() * sum_weights;
+                double r = uniform_real_distribution<double>(0, sum_weights)(rng);
                 double cumsum = 0.0;
                 int pick_idx = 0;
                 for (int i = 0; i < range; i++) {
@@ -345,8 +269,6 @@ public:
                     remaining--;
                 }
             }
-            
-
             
             sol.groups.push_back(group);
         }
@@ -421,17 +343,17 @@ public:
         
         int n = sol.groups.size();
         
-        // ランダムに操作を選択（6種類）
-        int op = rng.nextInt(6);
+        // ランダムに操作を選択（5種類）
+        int op = rng() % 5;
         
         if (op == 0) {
             // 操作1: 隣接グループを入れ替え
-            int i = rng.nextInt(n - 1);
+            int i = rng() % (n - 1);
             swap(sol.groups[i], sol.groups[i + 1]);
             
             int delta = recalculate_range(sol, i, n);
             // SA判定: delta < 0 なら必ず採用、delta >= 0 でも確率的に採用
-            if (delta < 0 || rng.nextDouble() < exp(-delta / temp)) {
+            if (delta < 0 || uniform_real_distribution<double>(0, 1)(rng) < exp(-delta / temp)) {
                 sol.cost += delta;
                 update_cache_range(sol, i, n);
                 return true;
@@ -441,8 +363,8 @@ public:
             }
         } else if (op == 1) {
             // 操作2: 2つのグループを入れ替え
-            int i = rng.nextInt(n);
-            int j = rng.nextInt(n);
+            int i = rng() % n;
+            int j = rng() % n;
             if (i == j) return false;
             if (i > j) swap(i, j);
             
@@ -450,7 +372,7 @@ public:
             
             // SA判定
             int delta = recalculate_range(sol, i, n);
-            if (delta < 0 || rng.nextDouble() < exp(-delta / temp)) {
+            if (delta < 0 || uniform_real_distribution<double>(0, 1)(rng) < exp(-delta / temp)) {
                 sol.cost += delta;
                 update_cache_range(sol, i, n);
                 return true;
@@ -460,7 +382,7 @@ public:
             }
         } else if (op == 2) {
             // 操作3: グループ内の訪問順序を反転
-            int i = rng.nextInt(n);
+            int i = rng() % n;
             if (sol.groups[i].size() < 2) return false;
             
             for (auto& p : sol.groups[i]) {
@@ -470,7 +392,7 @@ public:
             
             // SA判定
             int delta = recalculate_range(sol, i, n);
-            if (delta < 0 || rng.nextDouble() < exp(-delta / temp)) {
+            if (delta < 0 || uniform_real_distribution<double>(0, 1)(rng) < exp(-delta / temp)) {
                 sol.cost += delta;
                 update_cache_range(sol, i, n);
                 return true;
@@ -483,12 +405,12 @@ public:
             }
         } else if (op == 3) {
             // 操作4: カードを別グループに移動
-            int from_g = rng.nextInt(n);
-            int to_g = rng.nextInt(n);
+            int from_g = rng() % n;
+            int to_g = rng() % n;
             if (from_g == to_g) return false;
             if (sol.groups[from_g].size() <= 1) return false;
             
-            int card_idx = rng.nextInt(sol.groups[from_g].size());
+            int card_idx = rng() % sol.groups[from_g].size();
             auto card = sol.groups[from_g][card_idx];
             
             sol.groups[from_g].erase(sol.groups[from_g].begin() + card_idx);
@@ -497,7 +419,7 @@ public:
             // SA判定
             int start = min(from_g, to_g);
             int delta = recalculate_range(sol, start, n);
-            if (delta < 0 || rng.nextDouble() < exp(-delta / temp)) {
+            if (delta < 0 || uniform_real_distribution<double>(0, 1)(rng) < exp(-delta / temp)) {
                 sol.cost += delta;
                 update_cache_range(sol, start, n);
                 return true;
@@ -506,43 +428,21 @@ public:
                 sol.groups[from_g].insert(sol.groups[from_g].begin() + card_idx, card);
                 return false;
             }
-        } else if (op == 4) {
+        } else {
             // 操作5: 単一カードの向きを反転
-            int g = rng.nextInt(n);
-            int card_idx = rng.nextInt(sol.groups[g].size());
+            int g = rng() % n;
+            int card_idx = rng() % sol.groups[g].size();
             
             sol.groups[g][card_idx].second = !sol.groups[g][card_idx].second;
             
             // SA判定
             int delta = recalculate_range(sol, g, n);
-            if (delta < 0 || rng.nextDouble() < exp(-delta / temp)) {
+            if (delta < 0 || uniform_real_distribution<double>(0, 1)(rng) < exp(-delta / temp)) {
                 sol.cost += delta;
                 update_cache_range(sol, g, n);
                 return true;
             } else {
                 sol.groups[g][card_idx].second = !sol.groups[g][card_idx].second;
-                return false;
-            }
-        } else {
-            // 操作6: 2-opt（グループ順序の区間反転）
-            int i = rng.nextInt(n);
-            int j = rng.nextInt(n);
-            if (i == j) return false;
-            if (i > j) swap(i, j);
-            if (j - i < 2) return false;  // 最低2つ以上の区間
-            
-            // 区間[i, j]を反転
-            reverse(sol.groups.begin() + i, sol.groups.begin() + j + 1);
-            
-            // SA判定
-            int delta = recalculate_range(sol, i, n);
-            if (delta < 0 || rng.nextDouble() < exp(-delta / temp)) {
-                sol.cost += delta;
-                update_cache_range(sol, i, n);
-                return true;
-            } else {
-                // 元に戻す
-                reverse(sol.groups.begin() + i, sol.groups.begin() + j + 1);
                 return false;
             }
         }
@@ -606,14 +506,18 @@ public:
     }
     
     // ===== ヘルパー関数（既存） =====
-
+    int calc_insertion_cost(const Pos& o_s, const Pos& o_e, const Pos& i_s, const Pos& i_e) {
+        int d_total = manhattan_dist(o_s, i_s) + manhattan_dist(i_s, i_e) + manhattan_dist(i_e, o_e);
+        int d_base = manhattan_dist(o_s, o_e) + manhattan_dist(i_s, i_e);
+        return d_total - d_base;
+    }
     
     vector<pair<int, bool>> find_proximity_group(int main_card, bool main_visit_first, 
                                      const vector<bool>& used, int max_depth = 3) {
         vector<pair<int, bool>> group;
         group.push_back({main_card, main_visit_first});
         
-        bitset<NUM_CARDS> in_group;
+        bitset<N * N / 2> in_group;
         in_group.set(main_card);
         
         Pos current_start = main_visit_first ? input.card_pos[main_card].first : input.card_pos[main_card].second;
@@ -623,23 +527,16 @@ public:
             int best_inner = -1;
             int min_insertion_cost = INF;
             bool best_inner_visit_first = true;
-            
-            // ループ内で不変な値を事前に計算
-            // calc_insertion_cost = (dist(S, p_in) + dist(p_in, p_out) + dist(p_out, E)) - (dist(S, E) + dist(p_in, p_out))
-            //                     = dist(S, p_in) + dist(p_out, E) - dist(S, E)
-            int base_dist = manhattan_dist(current_start, current_end);
 
-            for (int card = 0; card < NUM_CARDS; card++) {
+            for (int card = 0; card < N * N / 2; card++) {
                 if (used[card]) continue;
                 if (in_group[card]) continue;
                 
                 Pos p1 = input.card_pos[card].first;
                 Pos p2 = input.card_pos[card].second;
                 
-                // cost1: enter p1, exit p2
-                int cost1 = manhattan_dist(current_start, p1) + manhattan_dist(p2, current_end) - base_dist;
-                // cost2: enter p2, exit p1
-                int cost2 = manhattan_dist(current_start, p2) + manhattan_dist(p1, current_end) - base_dist;
+                int cost1 = calc_insertion_cost(current_start, current_end, p1, p2);
+                int cost2 = calc_insertion_cost(current_start, current_end, p2, p1);
                 
                 if (cost1 < min_insertion_cost) {
                     min_insertion_cost = cost1;
