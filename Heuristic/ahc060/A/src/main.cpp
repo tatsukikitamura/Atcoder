@@ -23,72 +23,45 @@ struct BFSState {
     uint64_t hash;
 };
 
-// --- 永続シミュレーションバッファ ---
+// --- シミュレーションバッファ ---
 vector<char>                      sim_flavor;
 vector<unordered_set<uint64_t>>   sim_inventory;
 vector<int>                       sim_actions;
 vector<BFSState>                  sim_states;
-vector<int>                       sim_visit_count;   // ノード別訪問回数
-vector<int>                       sim_path_starts;   // 各BFSパス先頭のaction index
 
 void init_buffers() {
     sim_flavor.resize(N);
     sim_inventory.resize(K);
     sim_actions.reserve(T);
     sim_states.reserve(MAX_STATES + 1000);
-    sim_visit_count.resize(N);
-    sim_path_starts.reserve(5000);
 }
 
-// replay_count 個の旧アクションを再生後、BFS シミュレーションを実行
-// 結果は sim_actions / sim_visit_count / sim_path_starts に格納
-int simulate(const vector<int>& convert_at,
-             const vector<int>* replay_actions = nullptr,
-             int replay_count = 0,
-             const vector<int>* old_path_starts = nullptr)
+// flip_order: 各木ノードの変換優先順位（小さいほど早く変換）
+// flip_quota: 変換可能な上限数
+int simulate(const vector<int>& flip_order, int flip_quota, vector<int>& out_actions)
 {
     fill(sim_flavor.begin(), sim_flavor.end(), 'W');
     for (int i = 0; i < K; i++) sim_inventory[i].clear();
-    sim_actions.clear();
-    fill(sim_visit_count.begin(), sim_visit_count.end(), 0);
-    sim_path_starts.clear();
+    out_actions.clear();
+
+    // flip_orderに基づいて、quotaまでの木ノードを特定
+    vector<pair<int, int>> order_with_node;  // (order, node)
+    for (int i = K; i < N; i++) {
+        order_with_node.emplace_back(flip_order[i], i);
+    }
+    sort(order_with_node.begin(), order_with_node.end());
+    
+    unordered_set<int> should_flip;
+    for (int i = 0; i < min(flip_quota, (int)order_with_node.size()); i++) {
+        should_flip.insert(order_with_node[i].second);
+    }
 
     int cur = 0;
     int prev_from = -1;
     uint64_t cone_hash = HASH_EMPTY;
     int steps = 0;
+    int flipped_count = 0;
 
-    // ---- Phase 1: リプレイ ----
-    if (replay_actions && replay_count > 0) {
-        if (old_path_starts) {
-            for (int ps : *old_path_starts) {
-                if (ps < replay_count) sim_path_starts.push_back(ps);
-                else break;
-            }
-        }
-        int rc = min(replay_count, (int)replay_actions->size());
-        for (int i = 0; i < rc; i++) {
-            int action = (*replay_actions)[i];
-            sim_actions.push_back(action);
-            steps++;
-            if (action == -1) {
-                sim_flavor[cur] = 'R';
-            } else {
-                prev_from = cur;
-                cur = action;
-                sim_visit_count[cur]++;
-                if (cur < K) {
-                    sim_inventory[cur].insert(cone_hash);
-                    cone_hash = HASH_EMPTY;
-                } else {
-                    uint64_t ch = (sim_flavor[cur] == 'W') ? 1ULL : 2ULL;
-                    cone_hash = cone_hash * HASH_BASE + ch;
-                }
-            }
-        }
-    }
-
-    // ---- Phase 2: BFS シミュレーション ----
     auto get_path = [&](int idx, int shop) {
         vector<int> path;
         path.push_back(shop);
@@ -99,7 +72,6 @@ int simulate(const vector<int>& convert_at,
     };
 
     while (steps < T) {
-        sim_path_starts.push_back((int)sim_actions.size());
         sim_states.clear();
         sim_states.push_back({cur, prev_from, -1, 0, cone_hash});
 
@@ -139,11 +111,10 @@ int simulate(const vector<int>& convert_at,
 
         for (int node : chosen_path) {
             if (steps >= T) break;
-            sim_actions.push_back(node);
+            out_actions.push_back(node);
             steps++;
             prev_from = cur;
             cur = node;
-            sim_visit_count[cur]++;
 
             if (node < K) {
                 sim_inventory[node].insert(cone_hash);
@@ -151,11 +122,14 @@ int simulate(const vector<int>& convert_at,
             } else {
                 uint64_t ch = (sim_flavor[node] == 'W') ? 1ULL : 2ULL;
                 cone_hash = cone_hash * HASH_BASE + ch;
+                
+                // flip_orderに基づいてflipするか判定
                 if (sim_flavor[node] == 'W' && steps < T
-                        && steps >= convert_at[node]) {
-                    sim_actions.push_back(-1);
+                        && should_flip.count(node) && flipped_count < flip_quota) {
+                    out_actions.push_back(-1);
                     steps++;
                     sim_flavor[node] = 'R';
+                    flipped_count++;
                 }
             }
         }
@@ -183,89 +157,64 @@ int main() {
     mt19937 rng(42);
     uniform_real_distribution<double> urd(0.0, 1.0);
 
-    // ---- 初期解 ----
-    vector<int> convert_at(N, T + 1);
-    for (int i = K; i < N; i++)
-        convert_at[i] = (int)(rng() % (T-1000))+500;
+    int max_flips = N - K;
 
-    // 現在解 (current) を保持
-    int cur_score = simulate(convert_at);
-    vector<int> cur_actions(sim_actions);
-    vector<int> cur_visit_count(sim_visit_count);
-    vector<int> cur_path_starts(sim_path_starts);
+    // flip_order: 各木ノードの変換優先順位（0 ~ max_flips-1をシャッフル）
+    vector<int> flip_order(N, 0);
+    vector<int> perm;
+    for (int i = K; i < N; i++) perm.push_back(i);
+    shuffle(perm.begin(), perm.end(), rng);
+    for (int i = 0; i < (int)perm.size(); i++) {
+        flip_order[perm[i]] = i;
+    }
 
-    // 最良解 (best) を保持
+    // 初期解
+    vector<int> cur_actions;
+    int cur_score = simulate(flip_order, max_flips, cur_actions);
+
     int best_score = cur_score;
     vector<int> best_actions = cur_actions;
+    vector<int> best_flip_order = flip_order;
 
-    // 訪問10回以上の木ノード一覧（current から作る）
-    vector<int> frequent_nodes;
-    auto rebuild_frequent = [&]() {
-        frequent_nodes.clear();
-        for (int i = K; i < N; i++)
-            if (cur_visit_count[i] >= 10)
-                frequent_nodes.push_back(i);
-    };
-    rebuild_frequent();
-
-    // ---- 焼きなまし法 (Simulated Annealing) ----
+    // 焼きなまし法
     auto t_start = chrono::steady_clock::now();
     constexpr double TIME_LIMIT = 1.95;
 
-    // 温度スケジュール（時間ベース）
-    const double TEMP_START = 10.0;
+    const double TEMP_START = 8.0;
     const double TEMP_END   = 0.05;
 
+    auto elapsed = [&]() -> double {
+        return chrono::duration<double>(chrono::steady_clock::now() - t_start).count();
+    };
     auto progress01 = [&]() -> double {
-        double t = chrono::duration<double>(chrono::steady_clock::now() - t_start).count();
-        double p = t / TIME_LIMIT;
-        if (p < 0) p = 0;
-        if (p > 1) p = 1;
-        return p;
+        double p = elapsed() / TIME_LIMIT;
+        return min(1.0, max(0.0, p));
     };
     auto temperature = [&]() -> double {
-        // 幾何補間: T = T0 * (T1/T0)^p
         double p = progress01();
         return TEMP_START * pow(TEMP_END / TEMP_START, p);
     };
 
     int iter = 0;
 
-    while (!frequent_nodes.empty()) {
-        double elapsed = chrono::duration<double>(chrono::steady_clock::now() - t_start).count();
-        if (elapsed >= TIME_LIMIT) break;
+    while (elapsed() < TIME_LIMIT) {
+        // 近傍: 2つの木ノードのflip_orderをswap
+        int idx1 = K + rng() % (N - K);
+        int idx2 = K + rng() % (N - K);
+        if (idx1 == idx2) continue;
 
-        // 近傍: 訪問10回以上のノードから1つ選び convert_at を変更
-        int node = frequent_nodes[rng() % frequent_nodes.size()];
-        int old_val = convert_at[node];
-        int new_val = (int)(rng() % (T + 1));
-        if (new_val == old_val) continue;
+        swap(flip_order[idx1], flip_order[idx2]);
 
-        int t = min(old_val, new_val);
+        vector<int> new_actions;
+        int new_score = simulate(flip_order, max_flips, new_actions);
 
-        // 分岐点: ステップ >= t で初めて node を通るアクション（current 側を見る）
-        int diverge_idx = -1;
-        for (int j = max(0, t - 1), sz = (int)cur_actions.size(); j < sz; j++) {
-            if (cur_actions[j] == node) { diverge_idx = j; break; }
-        }
-        if (diverge_idx == -1) continue;
-
-        // 分岐点を含むパスの先頭までをリプレイ範囲とする（current 側を見る）
-        auto it = upper_bound(cur_path_starts.begin(), cur_path_starts.end(), diverge_idx);
-        int replay_count = (it != cur_path_starts.begin()) ? *--it : 0;
-
-        // 評価
-        convert_at[node] = new_val;
-        int score = simulate(convert_at, &cur_actions, replay_count, &cur_path_starts);
-
-        int delta = score - cur_score;
+        int delta = new_score - cur_score;
         bool accept = false;
 
         if (delta >= 0) {
             accept = true;
         } else {
             double temp = temperature();
-            // temp が極小でも安全に
             if (temp > 1e-12) {
                 double prob = exp((double)delta / temp);
                 if (urd(rng) < prob) accept = true;
@@ -273,21 +222,16 @@ int main() {
         }
 
         if (accept) {
-            // current を更新（simulate の結果が sim_* に入っているので swap）
-            cur_score = score;
-            cur_actions.swap(sim_actions);
-            cur_visit_count.swap(sim_visit_count);
-            cur_path_starts.swap(sim_path_starts);
-
-            rebuild_frequent();
+            cur_score = new_score;
+            cur_actions = new_actions;
 
             if (cur_score > best_score) {
                 best_score = cur_score;
                 best_actions = cur_actions;
+                best_flip_order = flip_order;
             }
         } else {
-            // 近傍を破棄
-            convert_at[node] = old_val;
+            swap(flip_order[idx1], flip_order[idx2]);
         }
 
         iter++;
