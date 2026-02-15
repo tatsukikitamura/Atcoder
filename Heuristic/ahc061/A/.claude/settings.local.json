@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(g++:*)",
+      "Bash(python scripts/test.py:*)",
+      "Bash(git stash:*)",
+      "Write",
+      "Read"
+    ]
+  }
+}

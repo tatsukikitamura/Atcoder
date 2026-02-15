@@ -50,10 +50,12 @@ build/v%$(EXE): src/experimental/v%.cpp
 # -----------------------------------------------------------------------------
 
 # Run with sample input using official visualizer
+# Usage: make vis CASE=0049.txt
+CASE ?= 0000.txt
 vis: $(SOLVER)
 	@if not exist tmp mkdir tmp
-	cd tools && cargo run -r --bin tester ../$(SOLVER) < in/0000.txt > ../tmp/output.txt
-	cd tools && cargo run -r --bin vis in/0000.txt ../tmp/output.txt
+	cd tools && cargo run -r --bin tester ../$(SOLVER) < in/$(CASE) > ../tmp/output.txt
+	cd tools && cargo run -r --bin vis in/$(CASE) ../tmp/output.txt
 
 # -----------------------------------------------------------------------------
 # Test Case Generation

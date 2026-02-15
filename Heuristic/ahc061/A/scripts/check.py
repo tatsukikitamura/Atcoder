@@ -22,6 +22,30 @@ TOOLS_DIR = "tools"
 TIMEOUT_SEC = 30
 
 
+
+def build_tester():
+    """Build the tester binary."""
+    print("Building tester...", end="", flush=True)
+    try:
+        subprocess.run(
+            ["cargo", "build", "-r", "--bin", "tester"],
+            cwd=TOOLS_DIR,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        print(" Done.")
+    except subprocess.CalledProcessError:
+        print("\nError: Failed to build tester.")
+        sys.exit(1)
+
+
+def get_tester_path():
+    """Get path to tester binary."""
+    ext = ".exe" if platform.system() == "Windows" else ""
+    return os.path.abspath(os.path.join(TOOLS_DIR, "target", "release", "tester" + ext))
+
+
 def get_solver_path():
     """Get the correct absolute solver path, checking for .exe on Windows."""
     base = os.path.abspath(SOLVER_PATH)
@@ -37,10 +61,15 @@ def main():
     parser.add_argument("-n", "--num", type=int, help="Number of test cases to check")
     args = parser.parse_args()
 
+
     solver = get_solver_path()
     if not os.path.exists(solver):
         print(f"Error: Solver not found. Run 'make' first.")
         sys.exit(1)
+
+    # Build tester
+    build_tester()
+    tester = get_tester_path()
 
     input_files = sorted(Path(INPUT_DIR).glob("*.txt"))
     if args.num:
@@ -60,7 +89,7 @@ def main():
         try:
             with open(input_file, 'r') as f_in:
                 result = subprocess.run(
-                    ["cargo", "run", "-q", "-r", "--bin", "tester", solver],
+                    [tester, solver],
                     stdin=f_in,
                     capture_output=True,
                     text=True,

@@ -8,6 +8,8 @@ Usage:
     python scripts/test.py -j 4      # Use 4 parallel workers
 """
 
+
+
 import subprocess
 import os
 import re
@@ -21,6 +23,29 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 SOLVER_PATH = "build/main"
 INPUT_DIR = "tools/in"
 TOOLS_DIR = "tools"
+
+
+def build_tester():
+    """Build the tester binary."""
+    print("Building tester...", end="", flush=True)
+    try:
+        subprocess.run(
+            ["cargo", "build", "-r", "--bin", "tester"],
+            cwd=TOOLS_DIR,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        print(" Done.")
+    except subprocess.CalledProcessError:
+        print("\nError: Failed to build tester.")
+        sys.exit(1)
+
+
+def get_tester_path():
+    """Get path to tester binary."""
+    ext = ".exe" if platform.system() == "Windows" else ""
+    return os.path.abspath(os.path.join(TOOLS_DIR, "target", "release", "tester" + ext))
 
 
 def get_solver_path():
@@ -37,11 +62,12 @@ def run_single_case(input_file: Path) -> tuple:
     """Run solver on a single test case via tester and return (name, score)."""
     name = input_file.stem
     solver = get_solver_path()
+    tester = get_tester_path()
 
     try:
         with open(input_file, 'r') as f_in:
             result = subprocess.run(
-                ["cargo", "run", "-q", "-r", "--bin", "tester", solver],
+                [tester, solver],
                 stdin=f_in,
                 capture_output=True,
                 text=True,
@@ -76,6 +102,9 @@ def main():
     if not os.path.exists(solver):
         print(f"Error: Solver not found at {SOLVER_PATH}. Run 'make' first.")
         sys.exit(1)
+
+    # Build tester
+    build_tester()
 
     # Get test cases
     input_files = sorted(Path(INPUT_DIR).glob("*.txt"))
