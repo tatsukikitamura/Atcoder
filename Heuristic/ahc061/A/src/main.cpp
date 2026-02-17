@@ -33,21 +33,22 @@ struct HyperParams {
     double wa_mid   = 0.30730916, wb_mid   = 0.90398914, wc_mid   = 0.51672106, wd_mid   = 0.33848466;
     double wa_late  = 0.10187044, wb_late  = 1.14537644, wc_late  = 0.95442664, wd_late  = 0.43595538;
 
-    double leader_mult = 1.74430704;
-    double ucb_c = 1.10539331;
+    double leader_mult = 1.21876323;
+    double ucb_c = 0.75114139;
 
-    double eval_expand = 0.00000194;
-    double eval_level  = 0.00000155;
-    double eval_reach  = 0.00007388;
+    double eval_expand = 0.00000329;
+    double eval_level  = 0.00000339;
+    double eval_reach  = 0.00001442;
+    double eval_attack = 0.00000371;
 
-    int rollout_depth = 5;
+    int rollout_depth = 4;
 
     int num_particles = 373;
     double pf_noise_w = 0.01706855;
     double pf_noise_eps = 0.00119343;
 
-    double u_wb_boost = 0.92623109;
-    double u_wd_penalty = 0.42945212;
+    double u_wb_boost = 0.75843313;
+    double u_wd_penalty = 0.48563285;
 
     double m_leader_scale = 0.24240965;
 } HP;
@@ -84,6 +85,7 @@ void loadParams(const char* filename) {
     HP.eval_expand  = get("eval_expand", HP.eval_expand);
     HP.eval_level   = get("eval_level", HP.eval_level);
     HP.eval_reach   = get("eval_reach", HP.eval_reach);
+    HP.eval_attack  = get("eval_attack", HP.eval_attack);
     HP.rollout_depth = (int)get("rollout_depth", HP.rollout_depth);
     HP.num_particles = (int)get("num_particles", HP.num_particles);
     HP.pf_noise_w   = get("pf_noise_w", HP.pf_noise_w);
@@ -467,40 +469,31 @@ double evaluate(const State& s, int currentTurn) {
     Bitboard reachMask = getReachableMask(s, 0);
     int myReach = popcount128(reachMask);
 
-    double expandPot = 0, levelPot = 0;
+    double expandPot = 0, levelPot = 0, attackPot = 0;
 
     // ★改善3: 2段階ビット抽出
     forEachBit(reachMask, [&](int i) {
         if (s.owner_map[i] == 0 && s.level[i] < U)
             levelPot += V[i] * (U - s.level[i]);
 
-        // Left (i-1) if i%10 != 0
-        if (i % 10 != 0) {
-            int ni = i - 1;
-            if (s.owner_map[ni] == -1) expandPot += V[ni];
-        }
-        // Right (i+1) if i%10 != 9
-        if (i % 10 != 9) {
-            int ni = i + 1;
-            if (s.owner_map[ni] == -1) expandPot += V[ni];
-        }
-        // Up (i-10) if i>=10
-        if (i >= 10) {
-            int ni = i - 10;
-            if (s.owner_map[ni] == -1) expandPot += V[ni];
-        }
-        // Down (i+10) if i<90
-        if (i < 90) {
-            int ni = i + 10;
-            if (s.owner_map[ni] == -1) expandPot += V[ni];
-        }
+        auto checkNeighbor = [&](int ni) {
+            int o = s.owner_map[ni];
+            if (o == -1) expandPot += V[ni];
+            else if (o > 0 && s.level[ni] == 1) attackPot += V[ni];
+        };
+
+        if (i % 10 != 0) checkNeighbor(i - 1);
+        if (i % 10 != 9) checkNeighbor(i + 1);
+        if (i >= 10)     checkNeighbor(i - 10);
+        if (i < 90)      checkNeighbor(i + 10);
     });
 
     double remain = (double)(T - currentTurn) / T;
     return log2(1.0 + ratio)
            + HP.eval_expand * expandPot * remain
            + HP.eval_level * levelPot * remain
-           + HP.eval_reach * myReach;
+           + HP.eval_reach * myReach
+           + HP.eval_attack * attackPot * remain;
 }
 
 // ===================== PLAYER 0 GREEDY (rollout policy) =====================
@@ -573,8 +566,8 @@ pair<int,int> selectMove(const State& rootState, int currentTurn) {
         if ((loops & 127) == 0) {
             double now = elapsedMs();
             if (now - elapsed > 30) break;
-            if (now > 1900) break;
-            double budgetMs = (1900 - now) / (T - currentTurn + 1);
+            if (now > 1950) break;
+            double budgetMs = (1950 - now) / (T - currentTurn + 1);
             if (loops * 0.005 > budgetMs) break;
         }
 

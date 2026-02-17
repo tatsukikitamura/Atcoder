@@ -69,55 +69,26 @@ def get_default_params_from_cpp(cpp_path: str) -> dict:
 
 # ===================== PARAMETER SPACE DEFINITION =====================
 def define_params(trial: optuna.Trial, defaults: dict) -> dict:
-    """Optunaのトライアルからハイパーパラメータを生成する"""
+    """Optunaのトライアルからハイパーパラメータを生成する (9個に厳選)"""
     params = {}
 
-    # === Search Space (Focused for Optimization) ===
-    # 探索空間を絞り、重要なパラメータのみを探索する。
-    # Phase境界やGreedy重みは固定し、探索パラメータとして定義しない(=main.cppのデフォルト値を使用)。
-
-    # --- TUNED PARAMETERS ---
+    # === 9 Parameters (Focused Search Space) ===
 
     # 1. Strategy & Search
-    # UCB定数: 探索と活用のバランス
     params["ucb_c"] = trial.suggest_float("ucb_c", 0.5, 3.0)
-    
-    # Rollout Depth: 深読みの手数 (Bitboard化で深くできる可能性)
     params["rollout_depth"] = trial.suggest_int("rollout_depth", 3, 20)
-    
-    # Beam Search
-    params["beam_width"] = trial.suggest_int("beam_width", 10, 1500)
-    params["beam_depth"] = trial.suggest_int("beam_depth", 5, 50)
-    
-    # Leader Multiplier: トッププレイヤーへの攻撃意欲
     params["leader_mult"] = trial.suggest_float("leader_mult", 0.8, 1.8)
 
     # 2. Evaluation Function Coefficients (Log scale)
-    # 拡張、レベル上げ、連結成分などの評価重み。初期値周辺を探る。
-    # Log scale探索なので、0に近い値も探索範囲に入れたい。
     low_e = 1e-6
     params["eval_expand"] = trial.suggest_float("eval_expand", low_e, 1e-3, log=True)
     params["eval_level"]  = trial.suggest_float("eval_level",  low_e, 1e-3, log=True)
     params["eval_reach"]  = trial.suggest_float("eval_reach",  1e-5,  1e-2, log=True)
+    params["eval_attack"] = trial.suggest_float("eval_attack", low_e, 1e-2, log=True)
 
-    # 3. Particle Filter
-    # 粒子数とノイズ
-    params["num_particles"] = trial.suggest_int("num_particles", 100, 500)
-    # ノイズは小さすぎると収束しすぎる、大きすぎると発散する
-    params["pf_noise_w"]   = trial.suggest_float("pf_noise_w",   0.001, 0.1, log=True)
-    params["pf_noise_eps"] = trial.suggest_float("pf_noise_eps", 0.001, 0.1, log=True)
-
-    # 4. Input Adaptive Parameters
-    # UやMに応じた補正係数
+    # 3. Input Adaptive Parameters
     params["u_wb_boost"]     = trial.suggest_float("u_wb_boost", 0.0, 1.0)
     params["u_wd_penalty"]   = trial.suggest_float("u_wd_penalty", 0.0, 1.0)
-    params["m_leader_scale"] = trial.suggest_float("m_leader_scale", 0.0, 0.3)
-
-    # --- FIXED PARAMETERS (Implicitly used by omission) ---
-    # 以下のパラメータは define_params に含めないことで、
-    # configファイルに出力されず、main.cpp のデフォルト値が使われる。
-    # phase1, phase2
-    # wa_early, wb_early, ... wd_late (計12個)
 
     return params
 
@@ -386,10 +357,8 @@ def main():
         # Enqueue current parameters as the first trial!
         tuned_param_names = [
             "ucb_c", "rollout_depth", "leader_mult",
-            "beam_width", "beam_depth",
-            "eval_expand", "eval_level", "eval_reach",
-            "num_particles", "pf_noise_w", "pf_noise_eps",
-            "u_wb_boost", "u_wd_penalty", "m_leader_scale"
+            "eval_expand", "eval_level", "eval_reach", "eval_attack",
+            "u_wb_boost", "u_wd_penalty"
         ]
         
         initial_params = {}
