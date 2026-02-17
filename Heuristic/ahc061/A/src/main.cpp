@@ -1,10 +1,19 @@
-#include <bits/stdc++.h>
+#include <iostream>
+#include <vector>
+#include <algorithm>
+#include <cstring>
+#include <cmath>
+#include <chrono>
+#include <random>
+#include <map>
+#include <fstream>
+#include <string>
 using namespace std;
 
 // ===================== GLOBALS =====================
 int N, M, T, U;
 int V[100]; // 1D array for value map
-const int dx[] = {-1, 1, 0, 0}; // for legacy logic if needed
+const int dx[] = {-1, 1, 0, 0};
 const int dy[] = {0, 0, -1, 1};
 
 mt19937 rng(chrono::steady_clock::now().time_since_epoch().count());
@@ -17,45 +26,35 @@ double elapsedMs() {
 
 // ===================== TUNABLE HYPERPARAMETERS =====================
 struct HyperParams {
-    // Phase boundaries [0,1]
     double phase1 = 0.20818362;
     double phase2 = 0.68789216;
 
-    // Greedy weights per phase (early / mid / late)
     double wa_early = 0.85139762, wb_early = 0.21523535, wc_early = 0.93231604, wd_early = 0.29557141;
     double wa_mid   = 0.30730916, wb_mid   = 0.90398914, wc_mid   = 0.51672106, wd_mid   = 0.33848466;
     double wa_late  = 0.10187044, wb_late  = 1.14537644, wc_late  = 0.95442664, wd_late  = 0.43595538;
 
-    // Leader attack multiplier
     double leader_mult = 1.74430704;
-
-    // UCB exploration constant
     double ucb_c = 1.10539331;
 
-    // Evaluation function coefficients
     double eval_expand = 0.00000194;
     double eval_level  = 0.00000155;
     double eval_reach  = 0.00007388;
 
-    // Rollout depth
     int rollout_depth = 5;
 
-    // Particle filter
     int num_particles = 373;
     double pf_noise_w = 0.01706855;
     double pf_noise_eps = 0.00119343;
 
-    // U-dependent adjustments
-    double u_wb_boost = 0.92623109;    // added to wb in mid/late when U is high
-    double u_wd_penalty = 0.42945212;  // subtracted from wd when U is high
+    double u_wb_boost = 0.92623109;
+    double u_wd_penalty = 0.42945212;
 
-    // M-dependent adjustments
-    double m_leader_scale = 0.24240965; // leader_mult += m_leader_scale * (M-2)
+    double m_leader_scale = 0.24240965;
 } HP;
 
 void loadParams(const char* filename) {
     ifstream fin(filename);
-    if (!fin.is_open()) return; // use defaults if no config
+    if (!fin.is_open()) return;
     string key; double val;
     map<string, double> params;
     while (fin >> key >> val) params[key] = val;
@@ -94,10 +93,8 @@ void loadParams(const char* filename) {
     HP.m_leader_scale = get("m_leader_scale", HP.m_leader_scale);
 }
 
-// Adapt params based on actual M, U after reading input
 void adaptParams() {
-    // U-dependent: boost strengthen weight for high U
-    double uFactor = max(0.0, (U - 2.0) / 3.0); // 0 for U<=2, 1 for U=5
+    double uFactor = max(0.0, (U - 2.0) / 3.0);
     HP.wb_mid  += HP.u_wb_boost * uFactor;
     HP.wb_late += HP.u_wb_boost * uFactor;
     HP.wd_mid  -= HP.u_wd_penalty * uFactor;
@@ -105,10 +102,8 @@ void adaptParams() {
     HP.wd_mid  = max(0.01, HP.wd_mid);
     HP.wd_late = max(0.01, HP.wd_late);
 
-    // M-dependent: adjust leader mult and rollout depth
     HP.leader_mult += HP.m_leader_scale * max(0, M - 2);
 
-    // Adjust rollout depth and particles for computation budget
     if (M >= 6) {
         HP.rollout_depth = min(HP.rollout_depth, 10);
         HP.num_particles = min(HP.num_particles, 120);
@@ -116,23 +111,15 @@ void adaptParams() {
         HP.rollout_depth = min(HP.rollout_depth + 8, 30);
     }
 
-    // U=1: no strengthening possible
     if (U == 1) {
         HP.wb_early = 0.0; HP.wb_mid = 0.0; HP.wb_late = 0.0;
-        HP.phase1 = 0.5; HP.phase2 = 0.5; // skip mid phase
+        HP.phase1 = 0.5; HP.phase2 = 0.5;
     }
 }
 
 // ===================== BITBOARD UTILS =====================
 using Bitboard = unsigned __int128;
 Bitboard MASK_ALL = 0;
-Bitboard MASK_COL_NOT_0 = 0; // Mask excluding column 0 (for left shift checks where <<1 touches next row if wrapped) - Wait, flattened row-major: i*10+j.
-// Left neighbor of (i,j) is (i, j-1) -> idx-1. Valid if j>0.
-// Right neighbor of (i,j) is (i, j+1) -> idx+1. Valid if j<9.
-// Top neighbor of (i,j) is (i-1, j) -> idx-10. Valid if i>0.
-// Bottom neighbor of (i,j) is (i+1, j) -> idx+10. Valid if i<9.
-
-// Precomputed boundary masks to prevent wrapping
 Bitboard MASK_NOT_COL_0 = 0;
 Bitboard MASK_NOT_COL_9 = 0;
 
@@ -141,10 +128,25 @@ void initBitboards() {
     MASK_NOT_COL_0 = MASK_ALL;
     MASK_NOT_COL_9 = MASK_ALL;
     for (int i = 0; i < 10; i++) {
-        // Col 0 indices: 0, 10, 20...
         MASK_NOT_COL_0 &= ~((Bitboard)1 << (i * 10));
-        // Col 9 indices: 9, 19, 29...
         MASK_NOT_COL_9 &= ~((Bitboard)1 << (i * 10 + 9));
+    }
+}
+
+// ★改善3: ビット抽出の2段階化ユーティリティ
+template<typename F>
+inline void forEachBit(Bitboard b, F&& func) {
+    uint64_t lo = (uint64_t)b;
+    while (lo) {
+        int idx = __builtin_ctzll(lo);
+        lo &= lo - 1; // 最下位ビットクリア
+        func(idx);
+    }
+    uint64_t hi = (uint64_t)(b >> 64);
+    while (hi) {
+        int idx = 64 + __builtin_ctzll(hi);
+        hi &= hi - 1;
+        func(idx);
     }
 }
 
@@ -156,40 +158,39 @@ inline int popcount128(Bitboard b) {
 
 // ===================== STATE =====================
 struct State {
-    Bitboard owner_mask[10]; // Bitboard for each player
-    int8_t owner_map[100];   // Fast lookup for owner of cell i (-1 if none)
-    uint8_t level[100];      // Level of each cell
-    uint8_t p_pos[10];       // Current position of each player (0..99)
+    Bitboard owner_mask[10];
+    int8_t owner_map[100];
+    uint8_t level[100];
+    uint8_t p_pos[10];
+    double totalScore[10]; // ★改善2: スコア差分更新用
 
     void init() {
-        for(int i=0; i<10; i++) owner_mask[i] = 0;
+        for(int i=0; i<10; i++) { owner_mask[i] = 0; totalScore[i] = 0.0; }
         memset(owner_map, -1, sizeof(owner_map));
         memset(level, 0, sizeof(level));
     }
 
+    // ★改善2: O(1)スコア取得
     double score(int p) const {
+        return totalScore[p];
+    }
+
+    // デバッグ用: totalScoreの整合性検証
+    double scoreNaive(int p) const {
         double s = 0;
-        // Iterate only over owned cells
-        // Using owner_mask[p] allows skipping non-owned cells
-        Bitboard b = owner_mask[p];
-        while (b) {
-            // Find index of standard trailing zeros
-            // __builtin_ctzll handles 64bit. Need 128 bit handling.
-            uint64_t lo = (uint64_t)b;
-            int idx;
-            if (lo) {
-                idx = __builtin_ctzll(lo);
-                // Remove bit
-                b &= ~((Bitboard)1 << idx);
-            } else {
-                uint64_t hi = (uint64_t)(b >> 64);
-                idx = 64 + __builtin_ctzll(hi);
-                // Remove bit: hi &= ~(1<<(idx-64)) -> b &= ...
-                b &= ~((Bitboard)1 << idx);
-            }
+        forEachBit(owner_mask[p], [&](int idx) {
             s += (double)V[idx] * level[idx];
-        }
+        });
         return s;
+    }
+
+    // totalScoreをowner_mask/level/owner_mapから再構築
+    void rebuildTotalScore() {
+        for(int p=0; p<10; p++) totalScore[p] = 0.0;
+        for(int i=0; i<100; i++) {
+            int o = owner_map[i];
+            if (o != -1) totalScore[o] += (double)V[i] * level[i];
+        }
     }
 };
 
@@ -199,26 +200,23 @@ struct MoveList {
     int cnt;
 };
 
-// Returns a bitboard of reachable cells for player p (including own territory)
 inline Bitboard getReachableMask(const State& s, int p) {
     Bitboard current = ((Bitboard)1 << s.p_pos[p]);
     Bitboard visited = current;
     Bitboard my_area = s.owner_mask[p];
-    
-    // Iterative bitwise dilation constrained to my_area
+
     while (true) {
-        // Dilation: left, right, up, down
         Bitboard next = current;
-        next |= ((current & MASK_NOT_COL_0) >> 1); // Left
-        next |= ((current & MASK_NOT_COL_9) << 1); // Right
-        next |= (current >> 10);                   // Up
-        next |= (current << 10);                   // Down
-        
-        next &= my_area; // Constrain to owned area
-        next &= ~visited; // Only new cells
-        
+        next |= ((current & MASK_NOT_COL_0) >> 1);
+        next |= ((current & MASK_NOT_COL_9) << 1);
+        next |= (current >> 10);
+        next |= (current << 10);
+
+        next &= my_area;
+        next &= ~visited;
+
         if (next == 0) break;
-        
+
         visited |= next;
         current = next;
     }
@@ -227,113 +225,56 @@ inline Bitboard getReachableMask(const State& s, int p) {
 
 void getMovable(const State& s, int p, MoveList& ml) {
     Bitboard reach = getReachableMask(s, p);
-    
-    // Dilation from reachable area to find adjacent moves
-    Bitboard candidates = reach; // Can stay
+
+    Bitboard candidates = reach;
     candidates |= ((reach & MASK_NOT_COL_0) >> 1);
     candidates |= ((reach & MASK_NOT_COL_9) << 1);
     candidates |= (reach >> 10);
     candidates |= (reach << 10);
-    
-    // Mask out all current player positions (cannot move to occupied cell)
+
     Bitboard occupied = 0;
     for(int i=0; i<M; i++) if(i != p) occupied |= ((Bitboard)1 << s.p_pos[i]);
-    
+
     candidates &= ~occupied;
-    candidates &= MASK_ALL; // Ensure within bounds (implicit but safe)
+    candidates &= MASK_ALL;
 
-    // Extract indices
+    // ★改善3: 2段階ビット抽出
     ml.cnt = 0;
-    while (candidates) {
-        uint64_t lo = (uint64_t)candidates;
-        int idx;
-        if (lo) {
-            idx = __builtin_ctzll(lo);
-            candidates &= ~((Bitboard)1 << idx);
-        } else {
-            uint64_t hi = (uint64_t)(candidates >> 64);
-            idx = 64 + __builtin_ctzll(hi);
-            candidates &= ~((Bitboard)1 << idx);
-        }
+    forEachBit(candidates, [&](int idx) {
         ml.idx[ml.cnt++] = idx;
-    }
-}
-
-// ===================== UNDO / DELTA UPDATE =====================
-struct UndoData {
-    int p_pos[10];
-    struct CellChange {
-        uint8_t idx;
-        int8_t old_owner;
-        uint8_t old_level;
-    };
-    CellChange changes[20]; 
-    int changeCnt = 0;
-    
-    void addChange(int idx, int8_t owner, uint8_t level) {
-        if (changeCnt < 20) {
-            changes[changeCnt++] = { (uint8_t)idx, owner, level };
-        }
-    }
-};
-
-void undoTurn(State& s, const UndoData& u) {
-    // Restore positions
-    for(int p=0; p<M; p++) s.p_pos[p] = u.p_pos[p];
-    
-    // Reverse cell changes
-    for(int i=u.changeCnt-1; i>=0; i--) {
-        int idx = u.changes[i].idx;
-        int8_t old_o = u.changes[i].old_owner;
-        uint8_t old_l = u.changes[i].old_level;
-        
-        int8_t cur_o = s.owner_map[idx];
-        
-        // Update masks
-        if (cur_o != -1) s.owner_mask[cur_o] &= ~((Bitboard)1 << idx);
-        if (old_o != -1) s.owner_mask[old_o] |= ((Bitboard)1 << idx);
-        
-        s.owner_map[idx] = old_o;
-        s.level[idx] = old_l;
-    }
+    });
 }
 
 // ===================== TURN SIMULATION =====================
-void simulateTurn(State& s, int moves[8], UndoData* undo = nullptr) { // moves is array of indices (0..99)
+// ★改善2 + 改善4: totalScore差分更新 + cellCnt除去
+void simulateTurn(State& s, int moves[8]) {
     int prevPos[8];
-    if (undo) {
-        undo->changeCnt = 0;
-        for (int p = 0; p < M; p++) undo->p_pos[p] = s.p_pos[p];
-    }
     for (int p = 0; p < M; p++) {
         prevPos[p] = s.p_pos[p];
         s.p_pos[p] = moves[p];
     }
 
     bool recalled[8] = {};
-    int cellCnt[100] = {}; // Only needs to track up to 8 players, so safe
-    
-    for (int p = 0; p < M; p++) cellCnt[s.p_pos[p]]++;
 
-    // Conflict resolution
-    for (int i = 0; i < 100; i++) {
-        if (cellCnt[i] < 2) continue;
-        int co = s.owner_map[i];
-        bool ownerHere = false;
-        // Check if owner is here
-        for (int p = 0; p < M; p++) {
-            if (s.p_pos[p] == i && p == co) { ownerHere = true; break; }
+    // ★改善4: O(M^2)衝突判定 (cellCnt[100]除去)
+    for (int p = 0; p < M; p++) {
+        int cell = s.p_pos[p];
+        bool hasConflict = false;
+        for (int q = 0; q < M; q++) {
+            if (q != p && s.p_pos[q] == cell) { hasConflict = true; break; }
         }
-        
-        for (int p = 0; p < M; p++) {
-            if (s.p_pos[p] != i) continue;
-            // If owner is here, everyone else is recalled.
-            // If owner is NOT here, everyone is recalled.
-            if (ownerHere && co >= 0) {
-                if (p != co) recalled[p] = true;
-            } else {
-                recalled[p] = true;
-            }
+        if (!hasConflict) continue;
+
+        int co = s.owner_map[cell];
+        bool ownerHere = false;
+        for (int q = 0; q < M; q++) {
+            if (s.p_pos[q] == cell && q == co) { ownerHere = true; break; }
+        }
+
+        if (ownerHere && co >= 0) {
+            if (p != co) recalled[p] = true;
+        } else {
+            recalled[p] = true;
         }
     }
 
@@ -341,31 +282,37 @@ void simulateTurn(State& s, int moves[8], UndoData* undo = nullptr) { // moves i
         if (recalled[p]) continue;
         int idx = s.p_pos[p];
         int owner = s.owner_map[idx];
-        
-        if (undo) undo->addChange(idx, owner, s.level[idx]); // Record BEFORE change
-        
+
         if (owner == -1) {
+            // 空きセルを獲得
             s.owner_mask[p] |= ((Bitboard)1 << idx);
             s.owner_map[idx] = p;
             s.level[idx] = 1;
+            s.totalScore[p] += (double)V[idx] * 1; // ★改善2
         } else if (owner == p) {
-            if (s.level[idx] < U) s.level[idx]++;
+            // 自分のセルを強化
+            if (s.level[idx] < U) {
+                s.totalScore[p] += (double)V[idx] * 1; // ★改善2: level差分=1
+                s.level[idx]++;
+            }
         } else {
+            // 敵セルを攻撃: levelを1下げる
+            s.totalScore[owner] -= (double)V[idx] * 1; // ★改善2: 敵スコア減少
             s.level[idx]--;
             if (s.level[idx] == 0) {
-                // Remove from old owner
+                // 奪取成功
                 s.owner_mask[owner] &= ~((Bitboard)1 << idx);
-                // Add to new owner
                 s.owner_mask[p] |= ((Bitboard)1 << idx);
                 s.owner_map[idx] = p;
                 s.level[idx] = 1;
+                s.totalScore[p] += (double)V[idx] * 1; // ★改善2: 新所有者スコア加算
             } else {
-                // Failed attack
+                // 奪取失敗 → リコール (levelの減少は維持される)
                 recalled[p] = true;
             }
         }
     }
-    
+
     for (int p = 0; p < M; p++) {
         if (recalled[p]) s.p_pos[p] = prevPos[p];
     }
@@ -374,7 +321,7 @@ void simulateTurn(State& s, int moves[8], UndoData* undo = nullptr) { // moves i
 // ===================== PARTICLE FILTER =====================
 struct Particle { double wa, wb, wc, wd, eps; };
 
-vector<vector<Particle>> particles; // [player][particle_idx]
+vector<vector<Particle>> particles;
 vector<vector<double>> pweights;
 vector<Particle> estimated;
 
@@ -394,7 +341,6 @@ void initAllParticles() {
     for (int p = 1; p < M; p++) initParticlesFor(p);
 }
 
-// aiEvalCell updated for flat index
 double aiEvalCell(const State& s, int p, int idx,
                   double wa, double wb, double wc, double wd) {
     int o = s.owner_map[idx];
@@ -403,10 +349,9 @@ double aiEvalCell(const State& s, int p, int idx,
     return (s.level[idx] == 1) ? V[idx] * wc : V[idx] * wd;
 }
 
-double computeLikelihood(const State& pre, int p, int obsIdx,
-                         const Particle& pt) {
-    MoveList ml;
-    getMovable(pre, p, ml);
+// ★改善1: getMovableを外部から受け取るバージョン
+double computeLikelihoodCached(const State& pre, int p, int obsIdx,
+                                const Particle& pt, const MoveList& ml) {
     if (ml.cnt == 0) return 1.0;
 
     bool found = false;
@@ -433,12 +378,18 @@ double computeLikelihood(const State& pre, int p, int obsIdx,
     return max(prob, 1e-10);
 }
 
+// ★改善1: getMovableをループ外で1回だけ呼ぶ
 void updateParticles(const State& pre, int p, int obsX, int obsY) {
     int obsIdx = obsX * 10 + obsY;
     int NP = HP.num_particles;
+
+    // ★改善1: 1回だけ計算してキャッシュ
+    MoveList ml;
+    getMovable(pre, p, ml);
+
     double sumW = 0;
     for (int k = 0; k < NP; k++) {
-        double lik = computeLikelihood(pre, p, obsIdx, particles[p][k]);
+        double lik = computeLikelihoodCached(pre, p, obsIdx, particles[p][k], ml);
         pweights[p][k] *= lik;
         sumW += pweights[p][k];
     }
@@ -506,6 +457,7 @@ int genAIMove(const State& s, int p, const Particle& param, mt19937& lr) {
 
 // ===================== EVALUATION FUNCTION =====================
 double evaluate(const State& s, int currentTurn) {
+    // ★改善2: score()がO(1)
     double s0 = s.score(0);
     double sa = 0;
     for (int p = 1; p < M; p++) sa = max(sa, s.score(p));
@@ -514,23 +466,14 @@ double evaluate(const State& s, int currentTurn) {
 
     Bitboard reachMask = getReachableMask(s, 0);
     int myReach = popcount128(reachMask);
-    
+
     double expandPot = 0, levelPot = 0;
-    // Iterate reachable cells
-    Bitboard b = reachMask;
-    while(b) {
-        // Safe extraction
-        uint64_t lo = (uint64_t)b;
-        int i;
-        if(lo) { i = __builtin_ctzll(lo); b &= ~((Bitboard)1<<i); }
-        else   { uint64_t hi = (uint64_t)(b>>64); i = 64 + __builtin_ctzll(hi); b &= ~((Bitboard)1<<i); }
-        
-        // i is index
+
+    // ★改善3: 2段階ビット抽出
+    forEachBit(reachMask, [&](int i) {
         if (s.owner_map[i] == 0 && s.level[i] < U)
             levelPot += V[i] * (U - s.level[i]);
-            
-        // Check neighbors for expansion (if neighbor is -1)
-        // Neighbors: left, right, up, down
+
         // Left (i-1) if i%10 != 0
         if (i % 10 != 0) {
             int ni = i - 1;
@@ -551,7 +494,7 @@ double evaluate(const State& s, int currentTurn) {
             int ni = i + 10;
             if (s.owner_map[ni] == -1) expandPot += V[ni];
         }
-    }
+    });
 
     double remain = (double)(T - currentTurn) / T;
     return log2(1.0 + ratio)
@@ -576,6 +519,7 @@ int greedyMove0(const State& s, int turn, mt19937& lr) {
         wa0 = HP.wa_late; wb0 = HP.wb_late; wc0 = HP.wc_late; wd0 = HP.wd_late;
     }
 
+    // ★改善2: score()がO(1)
     int leader = 1; double leaderSc = s.score(1);
     for (int p = 2; p < M; p++) { double sc = s.score(p); if (sc > leaderSc) { leaderSc = sc; leader = p; } }
 
@@ -613,89 +557,61 @@ double rollout(State s, int startTurn, mt19937& lr) {
 }
 
 // ===================== MCTS / SEARCH =====================
-struct Node {
-    State state;
-    int turn;
-    vector<int> legalMoves;
-    vector<pair<int, double>> children; // {move_idx, total_score}
-    vector<int> visits;
-    int totalVisits = 0;
-
-    Node(const State& s, int t) : state(s), turn(t) {
-        MoveList ml;
-        getMovable(s, 0, ml);
-        legalMoves.resize(ml.cnt);
-        for(int k=0; k<ml.cnt; k++) legalMoves[k] = ml.idx[k];
-        
-        children.resize(ml.cnt);
-        visits.resize(ml.cnt, 0);
-    }
-
-    int select(mt19937& lr) {
-        int best = -1;
-        double bestScore = -1e18;
-        for (size_t i = 0; i < legalMoves.size(); i++) {
-            if (visits[i] == 0) return i; // Expansion
-            double avg = children[i].second / visits[i];
-            double uct = avg + HP.ucb_c * sqrt(log(totalVisits) / visits[i]);
-            if (uct > bestScore) { bestScore = uct; best = i; }
-        }
-        return best;
-    }
-};
-
-pair<int,int> selectMove(State& rootState, int currentTurn) {
-    UndoData undo;
+pair<int,int> selectMove(const State& rootState, int currentTurn) {
     MoveList ml;
     getMovable(rootState, 0, ml);
     if (ml.cnt == 0) return {rootState.p_pos[0]/10, rootState.p_pos[0]%10};
 
-    // Dynamic time management
-    double remTime = 1900.0 - elapsedMs();
-    int remTurns = T - currentTurn + 1;
-    double timeLimit = max(10.0, remTime / remTurns); 
-    double startT = elapsedMs();
+    vector<double> scores(ml.cnt, 0.0);
+    vector<int> visits(ml.cnt, 0);
 
-    // Accumulators
-    vector<double> sumScore(ml.cnt, 0.0);
-    vector<int> counts(ml.cnt, 0);
+    double elapsed = elapsedMs();
 
-    int iter = 0;
+    int loops = 0;
     while (true) {
-        // Check time every 10 iterations
-        if ((iter & 15) == 0) {
-            if (elapsedMs() - startT > timeLimit) break;
+        loops++;
+        if ((loops & 127) == 0) {
+            double now = elapsedMs();
+            if (now - elapsed > 30) break;
+            if (now > 1900) break;
+            double budgetMs = (1900 - now) / (T - currentTurn + 1);
+            if (loops * 0.005 > budgetMs) break;
         }
 
-        int k = iter % ml.cnt; 
-        
-        int moves[8];
-        moves[0] = ml.idx[k];
-        for(int p=1; p<M; p++) moves[p] = genAIMove(rootState, p, estimated[p], rng);
-        
-        simulateTurn(rootState, moves, &undo);
-        double sc = evaluate(rootState, currentTurn + 1);
-        undoTurn(rootState, undo);
-        
-        sumScore[k] += sc;
-        counts[k]++;
-        iter++;
-    }
-    
-    // Find best average
-    int bestIdx = -1;
-    double bestScore = -1e18;
-    for (int k = 0; k < ml.cnt; k++) {
-        if (counts[k] == 0) continue;
-        double avg = sumScore[k] / counts[k];
-        if (avg > bestScore) {
-            bestScore = avg;
-            bestIdx = ml.idx[k];
+        int bestIdx = -1;
+        double bestUcb = -1e18;
+        int total = loops - 1;
+
+        for(int k=0; k<ml.cnt; k++) {
+            if (visits[k] == 0) { bestIdx = k; break; }
+            double avg = scores[k] / visits[k];
+            double ucb = avg + HP.ucb_c * sqrt(log(total) / visits[k]);
+            if (ucb > bestUcb) { bestUcb = ucb; bestIdx = k; }
         }
+        if (bestIdx == -1) bestIdx = rng() % ml.cnt;
+
+        State nextS = rootState;
+        int moves[8];
+        moves[0] = ml.idx[bestIdx];
+        for(int p=1; p<M; p++) moves[p] = genAIMove(rootState, p, estimated[p], rng);
+        simulateTurn(nextS, moves);
+
+        double sc = rollout(nextS, currentTurn + 1, rng);
+
+        scores[bestIdx] += sc;
+        visits[bestIdx]++;
     }
-    
-    if (bestIdx == -1) bestIdx = ml.idx[0];
-    return {bestIdx/10, bestIdx%10};
+
+    int bestK = 0;
+    double maxAvg = -1e18;
+    for(int k=0; k<ml.cnt; k++) {
+        if (visits[k] == 0) continue;
+        double a = scores[k] / visits[k];
+        if (a > maxAvg) { maxAvg = a; bestK = k; }
+    }
+
+    int idx = ml.idx[bestK];
+    return {idx/10, idx%10};
 }
 
 // ===================== MAIN =====================
@@ -705,12 +621,10 @@ int main(int argc, char* argv[]) {
 
     initBitboards();
 
-    // Load hyperparameters from config file (optional)
     if (argc >= 2) loadParams(argv[1]);
 
     cin >> N >> M >> T >> U;
 
-    // Adapt hyperparams based on actual M, U
     adaptParams();
 
     for (int i = 0; i < N; i++)
@@ -728,6 +642,7 @@ int main(int argc, char* argv[]) {
         state.owner_mask[p] |= ((Bitboard)1 << idx);
         state.owner_map[idx] = p;
         state.level[idx] = 1;
+        state.totalScore[p] += (double)V[idx] * 1; // ★改善5: 初期スコア設定
     }
 
     initAllParticles();
@@ -742,24 +657,15 @@ int main(int argc, char* argv[]) {
         int tx[8], ty[8], ex[8], ey[8];
         for (int p = 0; p < M; p++) cin >> tx[p] >> ty[p];
         for (int p = 0; p < M; p++) cin >> ex[p] >> ey[p];
-        
-        // Update state from input to be perfectly in sync with judge
-        // Actually, we should trust our simulation OR judge.
-        // AHC usually provides full state or delta.
-        // AHC061 provides full board state after moves.
-        
-        // State input format:
-        // N lines of owner
-        // N lines of level
+
+        // 盤面再読み込み: owner
         for (int i = 0; i < N; i++)
             for (int j = 0; j < N; j++) {
                 int owner; cin >> owner;
                 int idx = i*10 + j;
                 state.owner_map[idx] = owner;
-                // Rebuild masks is slow? No, 100 cells.
-                // We should clear masks and rebuild to be safe
             }
-        
+
         // Rebuild masks
         for(int p=0; p<M; p++) state.owner_mask[p] = 0;
         for(int i=0; i<100; i++) {
@@ -767,15 +673,19 @@ int main(int argc, char* argv[]) {
             if (o != -1) state.owner_mask[o] |= ((Bitboard)1 << i);
         }
 
+        // 盤面再読み込み: level
         for (int i = 0; i < N; i++)
             for (int j = 0; j < N; j++) {
                 int l; cin >> l;
                 state.level[i*10 + j] = l;
             }
-            
-        for (int p = 0; p < M; p++) { 
-            state.p_pos[p] = ex[p]*10 + ey[p]; 
+
+        for (int p = 0; p < M; p++) {
+            state.p_pos[p] = ex[p]*10 + ey[p];
         }
+
+        // ★改善5: totalScoreをジャッジ出力から再構築
+        state.rebuildTotalScore();
 
         for (int p = 1; p < M; p++)
             updateParticles(preTurnState, p, tx[p], ty[p]);
