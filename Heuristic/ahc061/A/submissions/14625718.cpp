@@ -4,19 +4,15 @@
 /**
  * AHC061 - Multi-Player Territory Game
  *
- * Algorithm: Chokudai Search (beam depth up to 6)
+ * Algorithm: Chokudai Search with opponent simulation (optimized)
  *
- * Evaluation function (6 components):
- *   1. VL total (score numerator)
- *   2. Top player VL penalty (score denominator suppression)
- *   3. Approach bonus (proximity to top's high-value low-level cells)
- *   4. Frontier level differential (own level - enemy level at borders)
- *   5. Future strengthen potential (remaining gap * value * safety * reachability)
- *   6. Collision avoidance (distance & predicted target overlap penalty)
- *
- * Attack rule: only attack the top-scoring AI player.
- * Opponent sim: depth 0-1 all, depth 2 top only, depth 3+ skip.
- * All parameters overridable via environment variables for Optuna tuning.
+ * === Optimizations applied ===
+ *   1. Incremental V*L: cached_vl/cached_ovl in BState, O(1) update in apply_move
+ *   2. Time check reduction: elapsed_sec() called every 4 iterations
+ *   3. Bitboard BFS: uint64_t[2] replaces bool[100] for visited array
+ *   4. Tiered evaluate: skip pex/pst at depth >= 3
+ *   5. nth_element: O(n) top-k selection instead of O(n log n) sort
+ *   6. #pragma GCC optimize + target for compiler-level speedup
  */
 
 #include <iostream>
@@ -29,73 +25,90 @@
 #include <cstdlib>
 using namespace std;
 
-// ===== Constants =====
 const int DX[] = {-1, 1, 0, 0};
 const int DY[] = {0, 0, -1, 1};
 
-// ===== Game state =====
 int N, M, T, U;
 int VV[10][10];
+
+// True game state (read from tester each turn)
 int g_owner[10][10], g_lv[10][10];
 int g_px[8], g_py[8];
 
 chrono::high_resolution_clock::time_point G_START;
 
 // ===== Top scorer tracking =====
-int g_top_player = 1;
-double g_my_vl = 0;
-double g_top_vl = 0;
+int g_top_player = 1;     // AI player with highest V*L
+double g_my_vl = 0;       // player 0's V*L (from actual game state)
+double g_top_vl = 0;      // top AI player's V*L
+double g_second_vl = 0;   // second-highest AI V*L (for threshold detection)
 
-// ===== Tunable parameters (all env-var overridable for Optuna) =====
+// ===== Tunable parameters (overridable via environment variables for Optuna) =====
+// Round 4 best (100 cases, 14 params: 9 base + 5 M/U)
+double P_W2_BASE      = 0.192222;
+double P_W3_MULT      = 1.128094;
+double P_W7_MAX       = 0.751249;
+double P_RATIO_SCALE  = 0.845678;
+double P_W4_BASE      = 0.127005;
+double P_W5_BASE      = 0.015127;
+double P_REACH_DECAY  = 0.495684;
+double P_QE_CAPTURE   = 2.604286;
+double P_QE_ATK_BONUS = 1.723014;
+double P_QE_EMPTY_FUT = 0.213099;
+double P_COL_NEAR     = 281.223607;
+double P_COL_TARGET   = 80.594577;
+double P_W7_PHASE_START    = 0.226949;
+double P_RATIO_PHASE_START = 0.155327;
+// M/U adaptation: param = base + coeff * (M-5 or U-3)
+double P_W2_BASE_U         = -0.008985;
+double P_W3_MULT_U         = -0.033488;
+double P_W7_MAX_M          = -0.006833;
+double P_W4_BASE_M         = 0.023649;
+double P_W7_PHASE_START_M  = -0.078900;
 
-// ① VL total weight (fixed at 1.0, not tuned)
-// ② Top player VL penalty
-// ② Top player VL penalty
-double P_W_FLD        = 1.712757;
-double P_W_TOP        = 1.121621;
-double P_TOP_PHASE    = 0.241533;
-double P_TOP_RAMP     = 0.388142;
-double P_DOMINANCE_W  = 1.030940;
-double P_RATIO_SCALE  = 1.607460;
-double P_RATIO_PHASE  = 0.506817;
-double P_QE_CAPTURE   = 8.957569;
-double P_QE_ATK_BONUS = 3.223586;
-double P_QE_EMPTY_FUT = 0.353015;
-double P_SAFE_MULT    = 0.149302;
-double P_COL_NEAR     = 195.216619;
-double P_COL_DIST2    = 88.848921;
-double P_COL_TARGET   = 240.913531;
-int    P_MAX_ITERS    = -1; // -1 means use time-based search
-
-
-
-
-// ===== Parameter loading from environment =====
 void read_params() {
     auto get = [](const char* name, double def) -> double {
         const char* v = getenv(name);
         return v ? atof(v) : def;
     };
-    P_W_TOP           = get("P_W_TOP",           P_W_TOP);
-    P_TOP_PHASE       = get("P_TOP_PHASE",       P_TOP_PHASE);
-    P_TOP_RAMP        = get("P_TOP_RAMP",        P_TOP_RAMP);
-    P_W_FLD           = get("P_W_FLD",           P_W_FLD);
-    P_DOMINANCE_W     = get("P_DOMINANCE_W",     P_DOMINANCE_W);
-    P_COL_NEAR        = get("P_COL_NEAR",        P_COL_NEAR);
-    P_COL_DIST2       = get("P_COL_DIST2",       P_COL_DIST2);
-    P_COL_TARGET      = get("P_COL_TARGET",      P_COL_TARGET);
-    P_RATIO_SCALE     = get("P_RATIO_SCALE",     P_RATIO_SCALE);
-    P_RATIO_PHASE     = get("P_RATIO_PHASE",     P_RATIO_PHASE);
-    P_QE_CAPTURE      = get("P_QE_CAPTURE",      P_QE_CAPTURE);
-    P_QE_ATK_BONUS    = get("P_QE_ATK_BONUS",    P_QE_ATK_BONUS);
-    P_QE_EMPTY_FUT    = get("P_QE_EMPTY_FUT",    P_QE_EMPTY_FUT);
-    P_SAFE_MULT       = get("P_SAFE_MULT",       P_SAFE_MULT);
-    P_MAX_ITERS       = (int)get("P_MAX_ITERS",    (double)P_MAX_ITERS);
+    // Base parameters
+    P_W2_BASE      = get("P_W2_BASE",      P_W2_BASE);
+    P_W3_MULT      = get("P_W3_MULT",      P_W3_MULT);
+    P_W7_MAX       = get("P_W7_MAX",       P_W7_MAX);
+    P_RATIO_SCALE  = get("P_RATIO_SCALE",  P_RATIO_SCALE);
+    P_W4_BASE      = get("P_W4_BASE",      P_W4_BASE);
+    P_W5_BASE      = get("P_W5_BASE",      P_W5_BASE);
+    P_REACH_DECAY  = get("P_REACH_DECAY",  P_REACH_DECAY);
+    P_QE_CAPTURE   = get("P_QE_CAPTURE",   P_QE_CAPTURE);
+    P_QE_ATK_BONUS = get("P_QE_ATK_BONUS", P_QE_ATK_BONUS);
+    P_QE_EMPTY_FUT = get("P_QE_EMPTY_FUT", P_QE_EMPTY_FUT);
+    P_COL_NEAR     = get("P_COL_NEAR",     P_COL_NEAR);
+    P_COL_TARGET   = get("P_COL_TARGET",   P_COL_TARGET);
+    P_W7_PHASE_START    = get("P_W7_PHASE_START",    P_W7_PHASE_START);
+    P_RATIO_PHASE_START = get("P_RATIO_PHASE_START", P_RATIO_PHASE_START);
+    // M/U coefficients
+    P_W2_BASE_U        = get("P_W2_BASE_U",        P_W2_BASE_U);
+    P_W3_MULT_U        = get("P_W3_MULT_U",        P_W3_MULT_U);
+    P_W7_MAX_M         = get("P_W7_MAX_M",         P_W7_MAX_M);
+    P_W4_BASE_M        = get("P_W4_BASE_M",        P_W4_BASE_M);
+    P_W7_PHASE_START_M = get("P_W7_PHASE_START_M", P_W7_PHASE_START_M);
 }
 
+// Apply M/U adaptation after M and U are known
+void apply_mu_adaptation() {
+    P_W2_BASE          += P_W2_BASE_U        * (U - 3);
+    P_W3_MULT          += P_W3_MULT_U        * (U - 3);
+    P_W7_MAX           += P_W7_MAX_M         * (M - 5);
+    P_W4_BASE          += P_W4_BASE_M        * (M - 5);
+    P_W7_PHASE_START   += P_W7_PHASE_START_M * (M - 5);
+    // Clamp to reasonable ranges
+    P_W2_BASE        = max(0.0, P_W2_BASE);
+    P_W3_MULT        = max(0.01, P_W3_MULT);
+    P_W7_MAX         = max(0.0, P_W7_MAX);
+    P_W4_BASE        = max(0.0, P_W4_BASE);
+    P_W7_PHASE_START = max(0.05, min(0.9, P_W7_PHASE_START));
+}
 
-
-// ===== Compute current scores from game state =====
 void compute_scores() {
     double scores[8] = {};
     for (int i = 0; i < N; i++)
@@ -106,23 +119,22 @@ void compute_scores() {
     g_my_vl = scores[0];
     g_top_player = 1;
     g_top_vl = 0;
+    g_second_vl = 0;
     for (int p = 1; p < M; p++) {
         if (scores[p] > g_top_vl) {
+            g_second_vl = g_top_vl;
             g_top_vl = scores[p];
             g_top_player = p;
+        } else if (scores[p] > g_second_vl) {
+            g_second_vl = scores[p];
         }
     }
 }
-
-
-
-
 
 inline double elapsed_sec() {
     return chrono::duration<double>(chrono::high_resolution_clock::now() - G_START).count();
 }
 
-// ===== I/O =====
 void read_initial() {
     cin >> N >> M >> T >> U;
     for (int i = 0; i < N; i++)
@@ -155,19 +167,19 @@ void read_turn() {
 
 // ===== Beam State =====
 struct BState {
-    int8_t own[100];   // owner of each cell (-1=none, 0..M-1)
-    int8_t lev[100];   // level of each cell
-    int8_t px[8], py[8]; // player positions
+    int8_t own[100];     // owner[r*10+c]: -1 or 0..M-1
+    int8_t lev[100];     // level[r*10+c]: 0..U
+    int8_t px[8], py[8]; // all player positions
     double score;
-    double cached_vl;      // player 0's V*L sum (incremental)
-    double cached_top_vl;  // top player's V*L sum (incremental)
-    double cached_fld;     // Frontier Level Differential (incremental)
-    int8_t fx, fy;         // first move (depth 0 choice)
+    double cached_vl;    // [OPT1] sum of V*L for player 0's cells
+    double cached_ovl;   // [OPT1] sum of V*L for opponents' cells
+    double cached_top_vl; // V*L of g_top_player specifically
+    int8_t fx, fy;       // first move of player 0 from root
 
     bool operator<(const BState& o) const { return score < o.score; }
 };
 
-// ===== Bitboard helpers for BFS visited =====
+// ===== [OPT4] Bitboard helpers =====
 inline bool btest(const uint64_t vis[2], int id) {
     return (vis[id >> 6] >> (id & 63)) & 1;
 }
@@ -175,9 +187,9 @@ inline void bset(uint64_t vis[2], int id) {
     vis[id >> 6] |= (1ULL << (id & 63));
 }
 
-// ===== BFS: get reachable candidate moves for a player =====
+// ===== BFS: reachable candidates for a player =====
 int get_cands(const BState& bs, int player, pair<int8_t,int8_t>* out) {
-    uint64_t vis[2] = {0, 0};
+    uint64_t vis[2] = {0, 0};  // [OPT4] bitboard instead of bool[100]
     pair<int8_t,int8_t> bq[100];
     int qh = 0, qt = 0, cnt = 0;
 
@@ -189,7 +201,6 @@ int get_cands(const BState& bs, int player, pair<int8_t,int8_t>* out) {
         int x = bq[qh].first, y = bq[qh].second;
         qh++;
 
-        // Check if another player's piece blocks this cell
         bool blk = false;
         for (int p = 0; p < M; p++) {
             if (p != player && bs.px[p] == x && bs.py[p] == y) {
@@ -199,7 +210,6 @@ int get_cands(const BState& bs, int player, pair<int8_t,int8_t>* out) {
         }
         if (!blk) out[cnt++] = {(int8_t)x, (int8_t)y};
 
-        // Expand through own territory
         if (bs.own[x * 10 + y] == player) {
             for (int d = 0; d < 4; d++) {
                 int nx = x + DX[d], ny = y + DY[d];
@@ -216,64 +226,26 @@ int get_cands(const BState& bs, int player, pair<int8_t,int8_t>* out) {
     return cnt;
 }
 
-// ===== FLD Helper =====
-inline double get_fld_part(const BState& bs, int x, int y) {
-    int id = x * 10 + y;
-    if (bs.own[id] != 0) return 0; // Only own cells contribute
-    
-    double v = VV[x][y];
-    int l = bs.lev[id];
-    double sum = 0;
-    for (int d = 0; d < 4; d++) {
-        int nx = x + DX[d], ny = y + DY[d];
-        if (nx < 0 || nx >= N || ny < 0 || ny >= N) {
-            sum += v * l * 0.25; // Wall
-        } else {
-            int nid = nx * 10 + ny;
-            int o = bs.own[nid];
-            if (o == 0) {
-                sum += v * l * 0.25; // Own
-            } else if (o > 0) {
-                sum += v * (l - bs.lev[nid]) * 0.25; // Enemy
-            }
-        }
-    }
-    return sum;
-}
-
-// ===== Apply move with incremental cache update =====
+// ===== [OPT1] Apply move with incremental V*L cache update =====
 inline void apply_move(BState& ns, int player, int tx, int ty) {
-    // Calc FLD diff
-    // Affected: (tx, ty) and neighbors
-    int aff_x[5], aff_y[5];
-    int aff_k = 0;
-    aff_x[aff_k] = tx; aff_y[aff_k] = ty; aff_k++;
-    for(int d=0; d<4; d++) {
-        int nx = tx + DX[d], ny = ty + DY[d];
-        if (nx>=0 && nx<N && ny>=0 && ny<N) {
-             aff_x[aff_k] = nx; aff_y[aff_k] = ny; aff_k++;
-        }
-    }
-    
-    double fld_old = 0;
-    for(int k=0; k<aff_k; k++) fld_old += get_fld_part(ns, aff_x[k], aff_y[k]);
-
     int id = tx * 10 + ty;
     int v = VV[tx][ty];
 
     if (ns.own[id] == -1) {
-        // Capture empty cell
+        // Claim empty cell
         ns.own[id] = player;
         ns.lev[id] = 1;
         ns.px[player] = tx;
         ns.py[player] = ty;
         if (player == 0) ns.cached_vl += v;
+        else             ns.cached_ovl += v;
         if (player == g_top_player) ns.cached_top_vl += v;
     } else if (ns.own[id] == player) {
         // Strengthen own cell
         if (ns.lev[id] < U) {
             ns.lev[id]++;
             if (player == 0) ns.cached_vl += v;
+            else             ns.cached_ovl += v;
             if (player == g_top_player) ns.cached_top_vl += v;
         }
         ns.px[player] = tx;
@@ -283,83 +255,63 @@ inline void apply_move(BState& ns, int player, int tx, int ty) {
         int old_owner = ns.own[id];
         ns.lev[id]--;
         if (ns.lev[id] == 0) {
-            // Level drops to 0: capture
+            // Captured! Remove old owner's V*L, add new owner's V*1
             if (old_owner == 0) ns.cached_vl -= v;
+            else                ns.cached_ovl -= v;
             if (old_owner == g_top_player) ns.cached_top_vl -= v;
             ns.own[id] = player;
             ns.lev[id] = 1;
             if (player == 0) ns.cached_vl += v;
+            else             ns.cached_ovl += v;
             if (player == g_top_player) ns.cached_top_vl += v;
             ns.px[player] = tx;
             ns.py[player] = ty;
         } else {
-            // Level reduced but not captured (attacker gets bounced)
+            // Failed attack: level decreased by 1 → V*L decreased by V
             if (old_owner == 0) ns.cached_vl -= v;
+            else                ns.cached_ovl -= v;
             if (old_owner == g_top_player) ns.cached_top_vl -= v;
+            // Piece recalled to pre-move position (unchanged)
         }
     }
-    
-    // FLD update
-    double fld_new = 0;
-    for(int k=0; k<aff_k; k++) fld_new += get_fld_part(ns, aff_x[k], aff_y[k]);
-    ns.cached_fld += (fld_new - fld_old);
 }
 
-// ===== Opponent simulation: all opponents (greedy) =====
-void sim_opponents_full(BState& ns) {
+// ===== Simulate opponent moves (greedy) =====
+void sim_opponents(BState& ns) {
     pair<int8_t,int8_t> opcands[100];
+
     for (int p = 1; p < M; p++) {
         int nc = get_cands(ns, p, opcands);
         if (nc == 0) continue;
+
         double best = -1e18;
         int bx = ns.px[p], by = ns.py[p];
+
         for (int i = 0; i < nc; i++) {
             int x = opcands[i].first, y = opcands[i].second;
             int id = x * 10 + y;
             double v = VV[x][y];
             double ev = 0;
+
             if (ns.own[id] == -1)          ev = v * 0.65;
             else if (ns.own[id] == p)      ev = (ns.lev[id] < U) ? v * 0.65 : 0;
-            else                           ev = v * 0.65; // Expectation of [0.3, 1.0] is 0.65 for both wc and wd
+            else                           ev = (ns.lev[id] == 1) ? v * 0.65 : v * 0.30;
+
             if (ev > best) { best = ev; bx = x; by = y; }
         }
         apply_move(ns, p, bx, by);
     }
 }
 
-// ===== Opponent simulation: top player only =====
-void sim_top_only(BState& ns) {
-    pair<int8_t,int8_t> opcands[100];
-    int p = g_top_player;
-    int nc = get_cands(ns, p, opcands);
-    if (nc == 0) return;
-    double best = -1e18;
-    int bx = ns.px[p], by = ns.py[p];
-    for (int i = 0; i < nc; i++) {
-        int x = opcands[i].first, y = opcands[i].second;
-        int id = x * 10 + y;
-        double v = VV[x][y];
-        double ev = 0;
-        if (ns.own[id] == -1)          ev = v * 0.65;
-        else if (ns.own[id] == p)      ev = (ns.lev[id] < U) ? v * 0.65 : 0;
-        else                           ev = v * 0.65; // All equal expectation
-        if (ev > best) { best = ev; bx = x; by = y; }
-    }
-    apply_move(ns, p, bx, by);
-}
-
-
+// ===== Quick eval for candidate pre-filtering =====
 inline double quick_eval(const BState& bs, int tx, int ty, int turn) {
     double v = VV[tx][ty];
     double phase = (double)turn / T;
     int id = tx * 10 + ty;
 
-    // Empty cell: claim it
     if (bs.own[id] == -1) {
         return v * (1.0 + P_QE_EMPTY_FUT * (U - 1)) * (1.5 - 0.5 * phase);
     }
-
-    // Own cell: strengthen (with safety bonus)
     if (bs.own[id] == 0) {
         if (bs.lev[id] < U) {
             int safe = 0;
@@ -368,152 +320,137 @@ inline double quick_eval(const BState& bs, int tx, int ty, int turn) {
                 if (nx < 0 || nx >= N || ny < 0 || ny >= N) safe++;
                 else if (bs.own[nx * 10 + ny] == 0) safe++;
             }
-            double safety_mult = 1.0 + safe * P_SAFE_MULT;
-            return v * (0.8 + 0.6 * phase) * safety_mult;
+            return v * (0.8 + 0.6 * phase) * (0.5 + 0.5 * safe / 4.0);
         }
-        return -1e9; // Already at max level
+        return -1e9;
     }
 
-    // Enemy territory: only attack top player
-    if (bs.own[id] != g_top_player) {
-        return -1e9; // Exclude non-top attacks
-    }
-
-    // Top player's cell: evaluate attack value
+    // ===== Enemy territory: attack evaluation =====
     int lev = bs.lev[id];
     int rem = T - turn;
+    bool is_top = (bs.own[id] == g_top_player);
 
-    // Estimate capture time: roughly lev turns
-    // If we have enough time and it's valuable, allow it.
-    
-    // Always allow Lv1 (high value)
+    // Level 1: one-hit capture (always valuable)
     if (lev == 1) {
         double base = v * P_QE_CAPTURE;
-        if (phase > 0.4)
+        // [ATTACK] Bonus for capturing top scorer's cells in late game
+        // This directly reduces S_A (denominator of S_0/S_A)
+        if (is_top && phase > 0.4)
             base += v * P_QE_ATK_BONUS * min(1.0, (phase - 0.4) * 2.0);
         return base;
     }
 
-    // For Lv >= 2, check if we have enough turns
-    // Heuristic: need `lev` turns to capture.
-    if (rem >= lev + 2) { // +2 buffer for movement/mistakes
-        // Base value: value * 1.0?
-        // Devalue slightly because it takes time.
-        // If v=16, lev=5, gaining 16 takes 5 turns. 3.2 per turn.
-        // Only worth if V is high or it hurts opponent a lot.
-        // For TOP player, hurting is worth double.
-        // value 16 -> gain 16, opp lose 16 -> diff 32.
-        // 32 / 5 = 6.4 per turn. Good.
-        return v * 1.0 - (lev * 5.0); // Simple penalty for time cost
+    // Level 2: only consider for top scorer in very late game
+    if (is_top && lev == 2 && phase > 0.75 && rem >= 3) {
+        return v * 0.8;
     }
-    
-    return -1e9; // Not enough time or not worth it
+
+    // Default: discourage level 2+ attacks (recall penalty too costly)
+    if (rem <= 5) return v * 0.8 - max(0.0, (rem - 1.0) * 20.0);
+    return v * 0.05 - 200;
 }
 
-// ⑦ Dominance Bonus: V sum of empty cells reachable only by me (depth 4)
-// Bitboard-based implementation (Optimized)
-double calc_dominance(const BState& bs) {
-    if (P_DOMINANCE_W < 0.001) return 0;
-    
-    using BB = unsigned __int128;
-    BB my_trav = 0, top_trav = 0, empty_mask = 0;
-    for(int i=0; i<N; i++) {
-        for(int j=0; j<N; j++) {
-            int id = i*10 + j;
-            int o = bs.own[id];
-            BB bit = ((BB)1) << id;
-            if (o == -1) {
-                my_trav |= bit;
-                top_trav |= bit;
-                empty_mask |= bit;
-            } else if (o == 0) {
-                my_trav |= bit;
-            } else if (o == g_top_player) {
-                top_trav |= bit;
+// ===== [OPT1+OPT5] Evaluate with cached V*L and depth-based tiering =====
+double evaluate(const BState& bs, int turn, int depth) {
+    double phase = (double)turn / T;
+    int rem = T - turn;
+
+    // [OPT1] Use cached values instead of re-accumulating
+    double vl = bs.cached_vl;
+    // Note: cached_ovl no longer used; replaced by ratio-based top_vl evaluation
+    double fut = 0, fld = 0, pex = 0, pst = 0;
+
+    int p0x = bs.px[0], p0y = bs.py[0];
+    // [OPT5] Skip pex/pst at deep depths (small weights, inaccurate anyway)
+    bool calc_prox = (depth < 3);
+
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < N; j++) {
+            int id = i * 10 + j;
+
+            if (bs.own[id] == 0) {
+                double v = VV[i][j];
+                int l = bs.lev[id];
+
+                // C2: Future strengthen potential
+                if (l < U) {
+                    int dist = abs(i - p0x) + abs(j - p0y);
+                    double reach = 1.0 / (1.0 + dist * P_REACH_DECAY);
+                    int gap = U - l;
+                    double feas = min(1.0, (double)rem / max(1, gap + dist));
+                    fut += v * gap * reach * feas;
+
+                    // C5: Proximity to strengthen (mid-late, shallow only)
+                    if (calc_prox && phase > 0.3 && dist > 0 && dist <= 4)
+                        pst += v * gap / (1.0 + dist);
+                }
+
+                // [NEW2] Frontier Level Differential (replaces old C3: saf)
+                // For each adjacent enemy cell, compute (my_level - enemy_level) * V
+                // Positive = defensively strong, Negative = vulnerable
+                // Wall/own-cell neighbors contribute +my_level (safe direction)
+                for (int d = 0; d < 4; d++) {
+                    int nx = i + DX[d], ny = j + DY[d];
+                    if (nx < 0 || nx >= N || ny < 0 || ny >= N) {
+                        fld += v * l * 0.25; // wall = safe
+                    } else {
+                        int nid = nx * 10 + ny;
+                        if (bs.own[nid] == 0) {
+                            fld += v * l * 0.25; // own cell = safe
+                        } else if (bs.own[nid] > 0) {
+                            // Enemy cell: level differential matters
+                            fld += v * (l - bs.lev[nid]) * 0.25;
+                        }
+                        // Unowned (-1): neutral, fld += 0
+                    }
+                }
+
+            } else if (calc_prox && phase < 0.7) {
+                // C4: Expansion proximity (early-mid, shallow only)
+                int dist = abs(i - p0x) + abs(j - p0y);
+                if (dist > 0 && dist <= 5) {
+                    double v = VV[i][j];
+                    if (bs.own[id] == -1)
+                        pex += v / (1.0 + dist);
+                    else if (bs.own[id] > 0 && bs.lev[id] == 1)
+                        pex += v * 0.5 / (1.0 + dist);
+                }
             }
         }
     }
-    
-    auto expand = [&](BB curr) -> BB {
-        BB next = (curr >> 10) | (curr << 10);
-        const BB col0 = ((BB)0x1004010040100401ULL) | (((BB)0x4010040ULL) << 64);
-        const BB col9 = ((BB)0x802008020080200ULL) | (((BB)0x802008020ULL) << 64);
-        next |= ((curr & ~col0) >> 1);
-        next |= ((curr & ~col9) << 1);
-        return next;
-    };
-    
-    BB my_vis = ((BB)1) << (bs.px[0] * 10 + bs.py[0]);
-    BB top_vis = ((BB)1) << (bs.px[g_top_player] * 10 + bs.py[g_top_player]);
-    BB my_curr = my_vis, top_curr = top_vis;
-    BB top_reached = top_vis;
-    
-    double score = 0;
-    for(int d=0; d<4; d++) {
-        my_curr = expand(my_curr) & my_trav & ~my_vis;
-        my_vis |= my_curr;
-        
-        top_curr = expand(top_curr) & top_trav & ~top_vis;
-        top_vis |= top_curr;
-        top_reached |= top_curr;
-        
-        BB valid = my_curr & empty_mask & ~top_reached;
-        uint64_t lo = (uint64_t)valid;
-        uint64_t hi = (uint64_t)(valid >> 64);
-        while(lo) {
-            int id = __builtin_ctzll(lo);
-            score += VV[id/10][id%10];
-            lo &= (lo - 1);
-        }
-        while(hi) {
-            int bit = __builtin_ctzll(hi);
-            int id = bit + 64;
-            score += VV[id/10][id%10];
-            hi &= (hi - 1);
-        }
-    }
-    return score;
-}
 
-// ===== Evaluate: 5-component weighted linear combination =====
-// Components ①-④ + ratio computed here; ⑥ applied at beam extraction.
-double evaluate(const BState& bs, int turn, int depth) {
-    (void)depth;
-    double phase = (double)turn / T;
+    // Phase-adaptive weights
+    double w1 = 1.0;
+    double w2 = P_W2_BASE * (1.0 - phase * 0.5);
+    double w3 = P_W3_MULT * (0.3 + phase * 0.7); // now for fld (frontier level diff)
 
-    // ① VL total (from cache, no recomputation)
-    double vl = bs.cached_vl;
-
-    // ② Top player VL penalty (phase-gated with ramp)
+    // [ATTACK] Penalty for opponents' V*L
     double top_vl = bs.cached_top_vl;
-    double w_top = (phase > P_TOP_PHASE)
-        ? P_W_TOP * min(1.0, (phase - P_TOP_PHASE) / max(0.01, P_TOP_RAMP))
-        : 0.0;
+    double w7 = (phase > P_W7_PHASE_START) ? P_W7_MAX * min(1.0, (phase - P_W7_PHASE_START) / 0.3) : 0.0;
 
-    double w_fld = P_W_FLD * (0.3 + phase * 0.7);         // ④ grows late
-    double fld = bs.cached_fld;
-
-    // Score ratio bonus (S_0/S_A awareness)
-
-    // Score ratio bonus (S_0/S_A awareness)
-    double ratio_w = (phase > P_RATIO_PHASE)
-        ? min(1.0, (phase - P_RATIO_PHASE) / 0.4) : 0.0;
+    // [NEW1] Score Ratio Approximation
+    // In the late game, transition from linear to ratio-based evaluation
+    // ratio_bonus = vl / max(1, top_vl) directly approximates the scoring function
+    double ratio_w = (phase > P_RATIO_PHASE_START) ? min(1.0, (phase - P_RATIO_PHASE_START) / 0.4) : 0.0;
     double ratio_bonus = 0;
     if (ratio_w > 0 && top_vl > 1.0) {
+        // Normalize so it's in a similar scale to vl
+        // target: higher vl/top_vl is better
         ratio_bonus = (vl / top_vl) * vl * P_RATIO_SCALE;
     }
 
-    // ⑦ Dominance
-    double dominance = calc_dominance(bs);
+    double result = w1 * vl + w2 * fut + w3 * fld - w7 * top_vl + ratio_w * ratio_bonus;
 
-    return vl                            // ① VL total
-         - w_top * top_vl                // ② Top penalty
-         + w_fld * fld                   // ④ Frontier diff
-         + ratio_w * ratio_bonus         // Ratio bonus
-         + dominance * P_DOMINANCE_W;    // ⑦ Dominance bonus
+    if (calc_prox) {
+        double w4 = P_W4_BASE * max(0.0, 1.0 - phase * 1.4);
+        double w5 = P_W5_BASE * max(0.0, phase - 0.3) / 0.7;
+        result += w4 * pex + w5 * pst;
+    }
+
+    return result;
 }
 
-// ===== AI prediction for collision avoidance (⑥) =====
+// ===== AI prediction (current game state, for collision avoidance) =====
 pair<int,int> predict_ai_now(int player) {
     uint64_t vis[2] = {0, 0};
     pair<int8_t,int8_t> bq[100], cds[100];
@@ -564,36 +501,40 @@ pair<int,int> predict_ai_now(int player) {
     return {bx, by};
 }
 
-// ===== Chokudai Search =====
+// ===== [OPT6] Scored candidate for nth_element =====
 struct ScoredCand {
     double eval;
     int8_t cx, cy;
 };
 
+// ===== Chokudai Search =====
 pair<int,int> choose_move(int turn) {
     const int MAX_D = min(6, T - turn);
-    const int MAX_C = 8;       // beam width for depth 1+
-    const int MAX_C0 = 20;     // beam width for depth 0
+    const int MAX_C = 8;
+    const int MAX_C0 = 20;
 
     // Time management
+    // Last ~3 turns have shallow search (MAX_D=1~3) and finish instantly,
+    // so discount them from the budget to give more time to earlier turns.
     double t0 = elapsed_sec();
-    double t_rem = 1.93 - t0;
+    double t_rem = 1.97 - t0;
     int t_left = T - turn;
     int effective_left = max(1, t_left - 3);
     double t_per = t_rem / max(1, effective_left);
     double phase = (double)turn / T;
-    if (phase < 0.5) t_per *= 1.2;  // Spend more time early
+    if (phase < 0.5) t_per *= 1.2;
     double deadline = t0 + max(t_per, 0.002);
 
-    if (P_MAX_ITERS > 0) deadline = 1e18; // Ignore time if using iter count
-
+    // [ATTACK] Identify top scorer for this turn
     compute_scores();
 
-    // Initialize beams
+    // Priority queues
     vector<priority_queue<BState>> beams(MAX_D + 1);
 
+    // Initialize root state with cached V*L values
     BState root;
     root.cached_vl = 0;
+    root.cached_ovl = 0;
     root.cached_top_vl = 0;
     for (int i = 0; i < N; i++)
         for (int j = 0; j < N; j++) {
@@ -602,15 +543,12 @@ pair<int,int> choose_move(int turn) {
             root.lev[id] = (int8_t)g_lv[i][j];
             if (g_owner[i][j] == 0)
                 root.cached_vl += VV[i][j] * g_lv[i][j];
-            else if (g_owner[i][j] == g_top_player)
-                root.cached_top_vl += VV[i][j] * g_lv[i][j];
+            else if (g_owner[i][j] > 0) {
+                root.cached_ovl += VV[i][j] * g_lv[i][j];
+                if (g_owner[i][j] == g_top_player)
+                    root.cached_top_vl += VV[i][j] * g_lv[i][j];
+            }
         }
-    // Init cached_fld
-    root.cached_fld = 0;
-    for(int i=0; i<N; i++)
-        for(int j=0; j<N; j++)
-             root.cached_fld += get_fld_part(root, i, j);
-
     for (int p = 0; p < M; p++) {
         root.px[p] = (int8_t)g_px[p];
         root.py[p] = (int8_t)g_py[p];
@@ -620,17 +558,14 @@ pair<int,int> choose_move(int turn) {
     root.score = evaluate(root, turn, 0);
     beams[0].push(root);
 
+    // Chokudai iterations
     pair<int8_t,int8_t> cds[100];
     ScoredCand sc[100];
 
-    // Chokudai search loop
     int iter = 0;
     for (;;) {
-        if (P_MAX_ITERS > 0) {
-            if (iter >= P_MAX_ITERS) break;
-        } else {
-            if (!(iter & 3) && elapsed_sec() >= deadline) break;
-        }
+        // [OPT3] Check time every 4 iterations
+        if (!(iter & 3) && elapsed_sec() >= deadline) break;
         iter++;
 
         bool any = false;
@@ -643,16 +578,16 @@ pair<int,int> choose_move(int turn) {
             int nc = get_cands(bs, 0, cds);
             if (nc == 0) continue;
 
-            // Score and filter candidates
+            // Score candidates with quick_eval
             int nsc = 0;
             for (int i = 0; i < nc; i++) {
                 int cx = cds[i].first, cy = cds[i].second;
                 int id = cx * 10 + cy;
-                if (bs.own[id] == 0 && bs.lev[id] >= U) continue; // Skip max-level own cells
+                if (bs.own[id] == 0 && bs.lev[id] >= U) continue;
                 sc[nsc++] = {quick_eval(bs, cx, cy, turn + d), (int8_t)cx, (int8_t)cy};
             }
 
-            // Top-k selection
+            // [OPT6] nth_element for O(n) top-k selection
             int lim = min(nsc, (d == 0) ? MAX_C0 : MAX_C);
             if (nsc > lim) {
                 nth_element(sc, sc + lim, sc + nsc,
@@ -661,23 +596,19 @@ pair<int,int> choose_move(int turn) {
                     });
             }
 
-            // Expand top candidates
             for (int i = 0; i < lim; i++) {
                 int cx = sc[i].cx, cy = sc[i].cy;
                 BState ns = bs;
 
                 apply_move(ns, 0, cx, cy);
 
-                // Depth-limited opponent simulation
-                if (d <= 1) {
-                    sim_opponents_full(ns);   // depth 0-1: all opponents
-                } else if (d == 2) {
-                    sim_top_only(ns);         // depth 2: top only
-                }
-                // depth 3+: skip opponent simulation
+                // Opponent simulation at all depths (accuracy > speed)
+                sim_opponents(ns);
 
                 ns.fx = (d == 0) ? (int8_t)cx : bs.fx;
                 ns.fy = (d == 0) ? (int8_t)cy : bs.fy;
+
+                // [OPT5] Depth-aware evaluation
                 ns.score = evaluate(ns, turn + d + 1, d + 1);
 
                 beams[d + 1].push(ns);
@@ -687,7 +618,7 @@ pair<int,int> choose_move(int turn) {
         if (!any) break;
     }
 
-    // ===== Extract best move with ⑥ collision avoidance =====
+    // Extract best from deepest non-empty beam
     BState best;
     best.fx = -1;
     best.fy = -1;
@@ -696,30 +627,27 @@ pair<int,int> choose_move(int turn) {
     for (int d = MAX_D; d >= 1; d--) {
         if (beams[d].empty()) continue;
 
-        // Extract top candidates from deepest beam
         vector<BState> top;
         while (!beams[d].empty() && (int)top.size() < 30) {
             top.push_back(beams[d].top());
             beams[d].pop();
         }
 
-        // Predict AI targets for collision check
+        // Collision avoidance
         pair<int,int> ai_tgt[8];
         for (int p = 1; p < M; p++)
             ai_tgt[p] = predict_ai_now(p);
 
-        // Apply collision penalties
         for (auto& bs : top) {
             for (int p = 1; p < M; p++) {
                 int dist = abs(g_px[p] - (int)bs.fx) + abs(g_py[p] - (int)bs.fy);
                 if (dist <= 1) bs.score -= P_COL_NEAR;
-                else if (dist == 2) bs.score -= P_COL_DIST2;
+                else if (dist == 2) bs.score -= 60;
                 if (ai_tgt[p].first == (int)bs.fx && ai_tgt[p].second == (int)bs.fy)
                     bs.score -= P_COL_TARGET;
             }
         }
 
-        // Pick best after collision adjustment
         for (const auto& bs : top) {
             if (bs.score > best.score) best = bs;
         }
@@ -728,7 +656,7 @@ pair<int,int> choose_move(int turn) {
 
     if (best.fx >= 0) return {best.fx, best.fy};
 
-    // Fallback: greedy on quick_eval
+    // Fallback: greedy
     pair<int8_t,int8_t> fb_cds[100];
     int fnc = get_cands(root, 0, fb_cds);
     double fb_best = -1e18;
@@ -750,6 +678,7 @@ int main() {
     read_params();
 
     read_initial();
+    apply_mu_adaptation();
     for (int turn = 0; turn < T; turn++) {
         auto [tx, ty] = choose_move(turn);
         cout << tx << " " << ty << endl;

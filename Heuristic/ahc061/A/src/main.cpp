@@ -1,759 +1,785 @@
-#pragma GCC optimize("O3,unroll-loops")
-#pragma GCC target("avx2,bmi,bmi2,popcnt")
-
-/**
- * AHC061 - Multi-Player Territory Game
- *
- * Algorithm: Chokudai Search (beam depth up to 6)
- *
- * Evaluation function (6 components):
- *   1. VL total (score numerator)
- *   2. Top player VL penalty (score denominator suppression)
- *   3. Approach bonus (proximity to top's high-value low-level cells)
- *   4. Frontier level differential (own level - enemy level at borders)
- *   5. Future strengthen potential (remaining gap * value * safety * reachability)
- *   6. Collision avoidance (distance & predicted target overlap penalty)
- *
- * Attack rule: only attack the top-scoring AI player.
- * Opponent sim: depth 0-1 all, depth 2 top only, depth 3+ skip.
- * All parameters overridable via environment variables for Optuna tuning.
- */
-
-#include <iostream>
-#include <vector>
-#include <algorithm>
-#include <queue>
-#include <cmath>
-#include <chrono>
-#include <cstring>
-#include <cstdlib>
+#include <bits/stdc++.h>
 using namespace std;
 
-// ===== Constants =====
-const int DX[] = {-1, 1, 0, 0};
-const int DY[] = {0, 0, -1, 1};
-
-// ===== Game state =====
+// ===================== GLOBALS =====================
 int N, M, T, U;
-int VV[10][10];
-int g_owner[10][10], g_lv[10][10];
-int g_px[8], g_py[8];
+int V[100]; // 1D array for value map
+const int dx[] = {-1, 1, 0, 0}; // for legacy logic if needed
+const int dy[] = {0, 0, -1, 1};
 
-chrono::high_resolution_clock::time_point G_START;
+mt19937 rng(chrono::steady_clock::now().time_since_epoch().count());
+auto programStart = chrono::steady_clock::now();
 
-// ===== Top scorer tracking =====
-int g_top_player = 1;
-double g_my_vl = 0;
-double g_top_vl = 0;
-
-// ===== Tunable parameters (all env-var overridable for Optuna) =====
-
-// ① VL total weight (fixed at 1.0, not tuned)
-// ② Top player VL penalty
-// ② Top player VL penalty
-double P_W_FLD        = 1.712757;
-double P_W_TOP        = 1.121621;
-double P_TOP_PHASE    = 0.241533;
-double P_TOP_RAMP     = 0.388142;
-double P_DOMINANCE_W  = 1.030940;
-double P_RATIO_SCALE  = 1.607460;
-double P_RATIO_PHASE  = 0.506817;
-double P_QE_CAPTURE   = 8.957569;
-double P_QE_ATK_BONUS = 3.223586;
-double P_QE_EMPTY_FUT = 0.353015;
-double P_SAFE_MULT    = 0.149302;
-double P_COL_NEAR     = 195.216619;
-double P_COL_DIST2    = 88.848921;
-double P_COL_TARGET   = 240.913531;
-int    P_MAX_ITERS    = -1; // -1 means use time-based search
-
-
-
-
-// ===== Parameter loading from environment =====
-void read_params() {
-    auto get = [](const char* name, double def) -> double {
-        const char* v = getenv(name);
-        return v ? atof(v) : def;
-    };
-    P_W_TOP           = get("P_W_TOP",           P_W_TOP);
-    P_TOP_PHASE       = get("P_TOP_PHASE",       P_TOP_PHASE);
-    P_TOP_RAMP        = get("P_TOP_RAMP",        P_TOP_RAMP);
-    P_W_FLD           = get("P_W_FLD",           P_W_FLD);
-    P_DOMINANCE_W     = get("P_DOMINANCE_W",     P_DOMINANCE_W);
-    P_COL_NEAR        = get("P_COL_NEAR",        P_COL_NEAR);
-    P_COL_DIST2       = get("P_COL_DIST2",       P_COL_DIST2);
-    P_COL_TARGET      = get("P_COL_TARGET",      P_COL_TARGET);
-    P_RATIO_SCALE     = get("P_RATIO_SCALE",     P_RATIO_SCALE);
-    P_RATIO_PHASE     = get("P_RATIO_PHASE",     P_RATIO_PHASE);
-    P_QE_CAPTURE      = get("P_QE_CAPTURE",      P_QE_CAPTURE);
-    P_QE_ATK_BONUS    = get("P_QE_ATK_BONUS",    P_QE_ATK_BONUS);
-    P_QE_EMPTY_FUT    = get("P_QE_EMPTY_FUT",    P_QE_EMPTY_FUT);
-    P_SAFE_MULT       = get("P_SAFE_MULT",       P_SAFE_MULT);
-    P_MAX_ITERS       = (int)get("P_MAX_ITERS",    (double)P_MAX_ITERS);
+double elapsedMs() {
+    return chrono::duration_cast<chrono::microseconds>(
+        chrono::steady_clock::now() - programStart).count() / 1000.0;
 }
 
+// ===================== TUNABLE HYPERPARAMETERS =====================
+struct HyperParams {
+    // Phase boundaries [0,1]
+    double phase1 = 0.20818362;
+    double phase2 = 0.68789216;
 
+    // Greedy weights per phase (early / mid / late)
+    double wa_early = 0.85139762, wb_early = 0.21523535, wc_early = 0.93231604, wd_early = 0.29557141;
+    double wa_mid   = 0.30730916, wb_mid   = 0.90398914, wc_mid   = 0.51672106, wd_mid   = 0.33848466;
+    double wa_late  = 0.10187044, wb_late  = 1.14537644, wc_late  = 0.95442664, wd_late  = 0.43595538;
 
-// ===== Compute current scores from game state =====
-void compute_scores() {
-    double scores[8] = {};
-    for (int i = 0; i < N; i++)
-        for (int j = 0; j < N; j++)
-            if (g_owner[i][j] >= 0)
-                scores[g_owner[i][j]] += VV[i][j] * g_lv[i][j];
+    // Leader attack multiplier
+    double leader_mult = 1.74430704;
 
-    g_my_vl = scores[0];
-    g_top_player = 1;
-    g_top_vl = 0;
-    for (int p = 1; p < M; p++) {
-        if (scores[p] > g_top_vl) {
-            g_top_vl = scores[p];
-            g_top_player = p;
-        }
+    // UCB exploration constant
+    double ucb_c = 1.10539331;
+
+    // Evaluation function coefficients
+    double eval_expand = 0.00000194;
+    double eval_level  = 0.00000155;
+    double eval_reach  = 0.00007388;
+
+    // Rollout depth
+    int rollout_depth = 5;
+
+    // Particle filter
+    int num_particles = 373;
+    double pf_noise_w = 0.01706855;
+    double pf_noise_eps = 0.00119343;
+
+    // U-dependent adjustments
+    double u_wb_boost = 0.92623109;    // added to wb in mid/late when U is high
+    double u_wd_penalty = 0.42945212;  // subtracted from wd when U is high
+
+    // M-dependent adjustments
+    double m_leader_scale = 0.24240965; // leader_mult += m_leader_scale * (M-2)
+} HP;
+
+void loadParams(const char* filename) {
+    ifstream fin(filename);
+    if (!fin.is_open()) return; // use defaults if no config
+    string key; double val;
+    map<string, double> params;
+    while (fin >> key >> val) params[key] = val;
+    fin.close();
+
+    auto get = [&](const string& k, double def) -> double {
+        auto it = params.find(k);
+        return (it != params.end()) ? it->second : def;
+    };
+
+    HP.phase1       = get("phase1", HP.phase1);
+    HP.phase2       = get("phase2", HP.phase2);
+    HP.wa_early     = get("wa_early", HP.wa_early);
+    HP.wb_early     = get("wb_early", HP.wb_early);
+    HP.wc_early     = get("wc_early", HP.wc_early);
+    HP.wd_early     = get("wd_early", HP.wd_early);
+    HP.wa_mid       = get("wa_mid", HP.wa_mid);
+    HP.wb_mid       = get("wb_mid", HP.wb_mid);
+    HP.wc_mid       = get("wc_mid", HP.wc_mid);
+    HP.wd_mid       = get("wd_mid", HP.wd_mid);
+    HP.wa_late      = get("wa_late", HP.wa_late);
+    HP.wb_late      = get("wb_late", HP.wb_late);
+    HP.wc_late      = get("wc_late", HP.wc_late);
+    HP.wd_late      = get("wd_late", HP.wd_late);
+    HP.leader_mult  = get("leader_mult", HP.leader_mult);
+    HP.ucb_c        = get("ucb_c", HP.ucb_c);
+    HP.eval_expand  = get("eval_expand", HP.eval_expand);
+    HP.eval_level   = get("eval_level", HP.eval_level);
+    HP.eval_reach   = get("eval_reach", HP.eval_reach);
+    HP.rollout_depth = (int)get("rollout_depth", HP.rollout_depth);
+    HP.num_particles = (int)get("num_particles", HP.num_particles);
+    HP.pf_noise_w   = get("pf_noise_w", HP.pf_noise_w);
+    HP.pf_noise_eps = get("pf_noise_eps", HP.pf_noise_eps);
+    HP.u_wb_boost   = get("u_wb_boost", HP.u_wb_boost);
+    HP.u_wd_penalty = get("u_wd_penalty", HP.u_wd_penalty);
+    HP.m_leader_scale = get("m_leader_scale", HP.m_leader_scale);
+}
+
+// Adapt params based on actual M, U after reading input
+void adaptParams() {
+    // U-dependent: boost strengthen weight for high U
+    double uFactor = max(0.0, (U - 2.0) / 3.0); // 0 for U<=2, 1 for U=5
+    HP.wb_mid  += HP.u_wb_boost * uFactor;
+    HP.wb_late += HP.u_wb_boost * uFactor;
+    HP.wd_mid  -= HP.u_wd_penalty * uFactor;
+    HP.wd_late -= HP.u_wd_penalty * uFactor;
+    HP.wd_mid  = max(0.01, HP.wd_mid);
+    HP.wd_late = max(0.01, HP.wd_late);
+
+    // M-dependent: adjust leader mult and rollout depth
+    HP.leader_mult += HP.m_leader_scale * max(0, M - 2);
+
+    // Adjust rollout depth and particles for computation budget
+    if (M >= 6) {
+        HP.rollout_depth = min(HP.rollout_depth, 10);
+        HP.num_particles = min(HP.num_particles, 120);
+    } else if (M <= 3) {
+        HP.rollout_depth = min(HP.rollout_depth + 8, 30);
+    }
+
+    // U=1: no strengthening possible
+    if (U == 1) {
+        HP.wb_early = 0.0; HP.wb_mid = 0.0; HP.wb_late = 0.0;
+        HP.phase1 = 0.5; HP.phase2 = 0.5; // skip mid phase
     }
 }
 
+// ===================== BITBOARD UTILS =====================
+using Bitboard = unsigned __int128;
+Bitboard MASK_ALL = 0;
+Bitboard MASK_COL_NOT_0 = 0; // Mask excluding column 0 (for left shift checks where <<1 touches next row if wrapped) - Wait, flattened row-major: i*10+j.
+// Left neighbor of (i,j) is (i, j-1) -> idx-1. Valid if j>0.
+// Right neighbor of (i,j) is (i, j+1) -> idx+1. Valid if j<9.
+// Top neighbor of (i,j) is (i-1, j) -> idx-10. Valid if i>0.
+// Bottom neighbor of (i,j) is (i+1, j) -> idx+10. Valid if i<9.
 
+// Precomputed boundary masks to prevent wrapping
+Bitboard MASK_NOT_COL_0 = 0;
+Bitboard MASK_NOT_COL_9 = 0;
 
-
-
-inline double elapsed_sec() {
-    return chrono::duration<double>(chrono::high_resolution_clock::now() - G_START).count();
+void initBitboards() {
+    MASK_ALL = ((Bitboard)1 << 100) - 1;
+    MASK_NOT_COL_0 = MASK_ALL;
+    MASK_NOT_COL_9 = MASK_ALL;
+    for (int i = 0; i < 10; i++) {
+        // Col 0 indices: 0, 10, 20...
+        MASK_NOT_COL_0 &= ~((Bitboard)1 << (i * 10));
+        // Col 9 indices: 9, 19, 29...
+        MASK_NOT_COL_9 &= ~((Bitboard)1 << (i * 10 + 9));
+    }
 }
 
-// ===== I/O =====
-void read_initial() {
-    cin >> N >> M >> T >> U;
-    for (int i = 0; i < N; i++)
-        for (int j = 0; j < N; j++)
-            cin >> VV[i][j];
-    for (int p = 0; p < M; p++)
-        cin >> g_px[p] >> g_py[p];
+inline int popcount128(Bitboard b) {
+    uint64_t lo = (uint64_t)b;
+    uint64_t hi = (uint64_t)(b >> 64);
+    return __builtin_popcountll(lo) + __builtin_popcountll(hi);
+}
 
-    for (int i = 0; i < N; i++)
-        for (int j = 0; j < N; j++)
-            g_owner[i][j] = -1;
-    memset(g_lv, 0, sizeof(g_lv));
+// ===================== STATE =====================
+struct State {
+    Bitboard owner_mask[10]; // Bitboard for each player
+    int8_t owner_map[100];   // Fast lookup for owner of cell i (-1 if none)
+    uint8_t level[100];      // Level of each cell
+    uint8_t p_pos[10];       // Current position of each player (0..99)
+
+    void init() {
+        for(int i=0; i<10; i++) owner_mask[i] = 0;
+        memset(owner_map, -1, sizeof(owner_map));
+        memset(level, 0, sizeof(level));
+    }
+
+    double score(int p) const {
+        double s = 0;
+        // Iterate only over owned cells
+        // Using owner_mask[p] allows skipping non-owned cells
+        Bitboard b = owner_mask[p];
+        while (b) {
+            // Find index of standard trailing zeros
+            // __builtin_ctzll handles 64bit. Need 128 bit handling.
+            uint64_t lo = (uint64_t)b;
+            int idx;
+            if (lo) {
+                idx = __builtin_ctzll(lo);
+                // Remove bit
+                b &= ~((Bitboard)1 << idx);
+            } else {
+                uint64_t hi = (uint64_t)(b >> 64);
+                idx = 64 + __builtin_ctzll(hi);
+                // Remove bit: hi &= ~(1<<(idx-64)) -> b &= ...
+                b &= ~((Bitboard)1 << idx);
+            }
+            s += (double)V[idx] * level[idx];
+        }
+        return s;
+    }
+};
+
+// ===================== BFS / MOVABLE SET =====================
+struct MoveList {
+    uint8_t idx[200];
+    int cnt;
+};
+
+// Returns a bitboard of reachable cells for player p (including own territory)
+inline Bitboard getReachableMask(const State& s, int p) {
+    Bitboard current = ((Bitboard)1 << s.p_pos[p]);
+    Bitboard visited = current;
+    Bitboard my_area = s.owner_mask[p];
+    
+    // Iterative bitwise dilation constrained to my_area
+    while (true) {
+        // Dilation: left, right, up, down
+        Bitboard next = current;
+        next |= ((current & MASK_NOT_COL_0) >> 1); // Left
+        next |= ((current & MASK_NOT_COL_9) << 1); // Right
+        next |= (current >> 10);                   // Up
+        next |= (current << 10);                   // Down
+        
+        next &= my_area; // Constrain to owned area
+        next &= ~visited; // Only new cells
+        
+        if (next == 0) break;
+        
+        visited |= next;
+        current = next;
+    }
+    return visited;
+}
+
+void getMovable(const State& s, int p, MoveList& ml) {
+    Bitboard reach = getReachableMask(s, p);
+    
+    // Dilation from reachable area to find adjacent moves
+    Bitboard candidates = reach; // Can stay
+    candidates |= ((reach & MASK_NOT_COL_0) >> 1);
+    candidates |= ((reach & MASK_NOT_COL_9) << 1);
+    candidates |= (reach >> 10);
+    candidates |= (reach << 10);
+    
+    // Mask out all current player positions (cannot move to occupied cell)
+    Bitboard occupied = 0;
+    for(int i=0; i<M; i++) if(i != p) occupied |= ((Bitboard)1 << s.p_pos[i]);
+    
+    candidates &= ~occupied;
+    candidates &= MASK_ALL; // Ensure within bounds (implicit but safe)
+
+    // Extract indices
+    ml.cnt = 0;
+    while (candidates) {
+        uint64_t lo = (uint64_t)candidates;
+        int idx;
+        if (lo) {
+            idx = __builtin_ctzll(lo);
+            candidates &= ~((Bitboard)1 << idx);
+        } else {
+            uint64_t hi = (uint64_t)(candidates >> 64);
+            idx = 64 + __builtin_ctzll(hi);
+            candidates &= ~((Bitboard)1 << idx);
+        }
+        ml.idx[ml.cnt++] = idx;
+    }
+}
+
+// ===================== UNDO / DELTA UPDATE =====================
+struct UndoData {
+    int p_pos[10];
+    struct CellChange {
+        uint8_t idx;
+        int8_t old_owner;
+        uint8_t old_level;
+    };
+    CellChange changes[20]; 
+    int changeCnt = 0;
+    
+    void addChange(int idx, int8_t owner, uint8_t level) {
+        if (changeCnt < 20) {
+            changes[changeCnt++] = { (uint8_t)idx, owner, level };
+        }
+    }
+};
+
+void undoTurn(State& s, const UndoData& u) {
+    // Restore positions
+    for(int p=0; p<M; p++) s.p_pos[p] = u.p_pos[p];
+    
+    // Reverse cell changes
+    for(int i=u.changeCnt-1; i>=0; i--) {
+        int idx = u.changes[i].idx;
+        int8_t old_o = u.changes[i].old_owner;
+        uint8_t old_l = u.changes[i].old_level;
+        
+        int8_t cur_o = s.owner_map[idx];
+        
+        // Update masks
+        if (cur_o != -1) s.owner_mask[cur_o] &= ~((Bitboard)1 << idx);
+        if (old_o != -1) s.owner_mask[old_o] |= ((Bitboard)1 << idx);
+        
+        s.owner_map[idx] = old_o;
+        s.level[idx] = old_l;
+    }
+}
+
+// ===================== TURN SIMULATION =====================
+void simulateTurn(State& s, int moves[8], UndoData* undo = nullptr) { // moves is array of indices (0..99)
+    int prevPos[8];
+    if (undo) {
+        undo->changeCnt = 0;
+        for (int p = 0; p < M; p++) undo->p_pos[p] = s.p_pos[p];
+    }
     for (int p = 0; p < M; p++) {
-        g_owner[g_px[p]][g_py[p]] = p;
-        g_lv[g_px[p]][g_py[p]] = 1;
+        prevPos[p] = s.p_pos[p];
+        s.p_pos[p] = moves[p];
     }
-}
 
-void read_turn() {
-    int a, b;
-    for (int p = 0; p < M; p++) cin >> a >> b;
-    for (int p = 0; p < M; p++) cin >> g_px[p] >> g_py[p];
-    for (int i = 0; i < N; i++)
-        for (int j = 0; j < N; j++)
-            cin >> g_owner[i][j];
-    for (int i = 0; i < N; i++)
-        for (int j = 0; j < N; j++)
-            cin >> g_lv[i][j];
-}
+    bool recalled[8] = {};
+    int cellCnt[100] = {}; // Only needs to track up to 8 players, so safe
+    
+    for (int p = 0; p < M; p++) cellCnt[s.p_pos[p]]++;
 
-// ===== Beam State =====
-struct BState {
-    int8_t own[100];   // owner of each cell (-1=none, 0..M-1)
-    int8_t lev[100];   // level of each cell
-    int8_t px[8], py[8]; // player positions
-    double score;
-    double cached_vl;      // player 0's V*L sum (incremental)
-    double cached_top_vl;  // top player's V*L sum (incremental)
-    double cached_fld;     // Frontier Level Differential (incremental)
-    int8_t fx, fy;         // first move (depth 0 choice)
-
-    bool operator<(const BState& o) const { return score < o.score; }
-};
-
-// ===== Bitboard helpers for BFS visited =====
-inline bool btest(const uint64_t vis[2], int id) {
-    return (vis[id >> 6] >> (id & 63)) & 1;
-}
-inline void bset(uint64_t vis[2], int id) {
-    vis[id >> 6] |= (1ULL << (id & 63));
-}
-
-// ===== BFS: get reachable candidate moves for a player =====
-int get_cands(const BState& bs, int player, pair<int8_t,int8_t>* out) {
-    uint64_t vis[2] = {0, 0};
-    pair<int8_t,int8_t> bq[100];
-    int qh = 0, qt = 0, cnt = 0;
-
-    int sx = bs.px[player], sy = bs.py[player];
-    bset(vis, sx * 10 + sy);
-    bq[qt++] = {(int8_t)sx, (int8_t)sy};
-
-    while (qh < qt) {
-        int x = bq[qh].first, y = bq[qh].second;
-        qh++;
-
-        // Check if another player's piece blocks this cell
-        bool blk = false;
+    // Conflict resolution
+    for (int i = 0; i < 100; i++) {
+        if (cellCnt[i] < 2) continue;
+        int co = s.owner_map[i];
+        bool ownerHere = false;
+        // Check if owner is here
         for (int p = 0; p < M; p++) {
-            if (p != player && bs.px[p] == x && bs.py[p] == y) {
-                blk = true;
-                break;
-            }
+            if (s.p_pos[p] == i && p == co) { ownerHere = true; break; }
         }
-        if (!blk) out[cnt++] = {(int8_t)x, (int8_t)y};
-
-        // Expand through own territory
-        if (bs.own[x * 10 + y] == player) {
-            for (int d = 0; d < 4; d++) {
-                int nx = x + DX[d], ny = y + DY[d];
-                if (nx >= 0 && nx < N && ny >= 0 && ny < N) {
-                    int nid = nx * 10 + ny;
-                    if (!btest(vis, nid)) {
-                        bset(vis, nid);
-                        bq[qt++] = {(int8_t)nx, (int8_t)ny};
-                    }
-                }
+        
+        for (int p = 0; p < M; p++) {
+            if (s.p_pos[p] != i) continue;
+            // If owner is here, everyone else is recalled.
+            // If owner is NOT here, everyone is recalled.
+            if (ownerHere && co >= 0) {
+                if (p != co) recalled[p] = true;
+            } else {
+                recalled[p] = true;
             }
         }
     }
-    return cnt;
-}
 
-// ===== FLD Helper =====
-inline double get_fld_part(const BState& bs, int x, int y) {
-    int id = x * 10 + y;
-    if (bs.own[id] != 0) return 0; // Only own cells contribute
-    
-    double v = VV[x][y];
-    int l = bs.lev[id];
-    double sum = 0;
-    for (int d = 0; d < 4; d++) {
-        int nx = x + DX[d], ny = y + DY[d];
-        if (nx < 0 || nx >= N || ny < 0 || ny >= N) {
-            sum += v * l * 0.25; // Wall
+    for (int p = 0; p < M; p++) {
+        if (recalled[p]) continue;
+        int idx = s.p_pos[p];
+        int owner = s.owner_map[idx];
+        
+        if (undo) undo->addChange(idx, owner, s.level[idx]); // Record BEFORE change
+        
+        if (owner == -1) {
+            s.owner_mask[p] |= ((Bitboard)1 << idx);
+            s.owner_map[idx] = p;
+            s.level[idx] = 1;
+        } else if (owner == p) {
+            if (s.level[idx] < U) s.level[idx]++;
         } else {
-            int nid = nx * 10 + ny;
-            int o = bs.own[nid];
-            if (o == 0) {
-                sum += v * l * 0.25; // Own
-            } else if (o > 0) {
-                sum += v * (l - bs.lev[nid]) * 0.25; // Enemy
+            s.level[idx]--;
+            if (s.level[idx] == 0) {
+                // Remove from old owner
+                s.owner_mask[owner] &= ~((Bitboard)1 << idx);
+                // Add to new owner
+                s.owner_mask[p] |= ((Bitboard)1 << idx);
+                s.owner_map[idx] = p;
+                s.level[idx] = 1;
+            } else {
+                // Failed attack
+                recalled[p] = true;
             }
         }
     }
-    return sum;
+    
+    for (int p = 0; p < M; p++) {
+        if (recalled[p]) s.p_pos[p] = prevPos[p];
+    }
 }
 
-// ===== Apply move with incremental cache update =====
-inline void apply_move(BState& ns, int player, int tx, int ty) {
-    // Calc FLD diff
-    // Affected: (tx, ty) and neighbors
-    int aff_x[5], aff_y[5];
-    int aff_k = 0;
-    aff_x[aff_k] = tx; aff_y[aff_k] = ty; aff_k++;
-    for(int d=0; d<4; d++) {
-        int nx = tx + DX[d], ny = ty + DY[d];
-        if (nx>=0 && nx<N && ny>=0 && ny<N) {
-             aff_x[aff_k] = nx; aff_y[aff_k] = ny; aff_k++;
+// ===================== PARTICLE FILTER =====================
+struct Particle { double wa, wb, wc, wd, eps; };
+
+vector<vector<Particle>> particles; // [player][particle_idx]
+vector<vector<double>> pweights;
+vector<Particle> estimated;
+
+void initParticlesFor(int p) {
+    uniform_real_distribution<double> dw(0.3, 1.0), de(0.1, 0.5);
+    particles[p].resize(HP.num_particles);
+    pweights[p].assign(HP.num_particles, 1.0 / HP.num_particles);
+    for (int k = 0; k < HP.num_particles; k++)
+        particles[p][k] = {dw(rng), dw(rng), dw(rng), dw(rng), de(rng)};
+    estimated[p] = {0.65, 0.65, 0.65, 0.65, 0.3};
+}
+
+void initAllParticles() {
+    particles.resize(M);
+    pweights.resize(M);
+    estimated.resize(M);
+    for (int p = 1; p < M; p++) initParticlesFor(p);
+}
+
+// aiEvalCell updated for flat index
+double aiEvalCell(const State& s, int p, int idx,
+                  double wa, double wb, double wc, double wd) {
+    int o = s.owner_map[idx];
+    if (o == -1) return V[idx] * wa;
+    if (o == p) return (s.level[idx] < U) ? V[idx] * wb : 0.0;
+    return (s.level[idx] == 1) ? V[idx] * wc : V[idx] * wd;
+}
+
+double computeLikelihood(const State& pre, int p, int obsIdx,
+                         const Particle& pt) {
+    MoveList ml;
+    getMovable(pre, p, ml);
+    if (ml.cnt == 0) return 1.0;
+
+    bool found = false;
+    for (int k = 0; k < ml.cnt; k++)
+        if (ml.idx[k] == obsIdx) { found = true; break; }
+    if (!found) return 1e-10;
+
+    double maxVal = -1e18;
+    int maxCnt = 0;
+    bool obsIsMax = false;
+    for (int k = 0; k < ml.cnt; k++) {
+        double val = aiEvalCell(pre, p, ml.idx[k], pt.wa, pt.wb, pt.wc, pt.wd);
+        if (val > maxVal + 1e-12) {
+            maxVal = val; maxCnt = 1;
+            obsIsMax = (ml.idx[k] == obsIdx);
+        } else if (val > maxVal - 1e-12) {
+            maxCnt++;
+            if (ml.idx[k] == obsIdx) obsIsMax = true;
         }
     }
+
+    double prob = pt.eps / ml.cnt;
+    if (obsIsMax) prob += (1.0 - pt.eps) / maxCnt;
+    return max(prob, 1e-10);
+}
+
+void updateParticles(const State& pre, int p, int obsX, int obsY) {
+    int obsIdx = obsX * 10 + obsY;
+    int NP = HP.num_particles;
+    double sumW = 0;
+    for (int k = 0; k < NP; k++) {
+        double lik = computeLikelihood(pre, p, obsIdx, particles[p][k]);
+        pweights[p][k] *= lik;
+        sumW += pweights[p][k];
+    }
+
+    if (sumW < 1e-30) { initParticlesFor(p); return; }
+    for (int k = 0; k < NP; k++) pweights[p][k] /= sumW;
+
+    // Systematic resampling
+    vector<Particle> newP(NP);
+    vector<double> cumW(NP);
+    cumW[0] = pweights[p][0];
+    for (int k = 1; k < NP; k++) cumW[k] = cumW[k-1] + pweights[p][k];
+
+    uniform_real_distribution<double> uni(0.0, 1.0 / NP);
+    double u = uni(rng);
+    int idx = 0;
+    for (int k = 0; k < NP; k++) {
+        double target = u + (double)k / NP;
+        while (idx < NP - 1 && cumW[idx] < target) idx++;
+        newP[k] = particles[p][idx];
+    }
+
+    normal_distribution<double> nw(0, HP.pf_noise_w), ne(0, HP.pf_noise_eps);
+    for (int k = 0; k < NP; k++) {
+        newP[k].wa  = clamp(newP[k].wa  + nw(rng), 0.3, 1.0);
+        newP[k].wb  = clamp(newP[k].wb  + nw(rng), 0.3, 1.0);
+        newP[k].wc  = clamp(newP[k].wc  + nw(rng), 0.3, 1.0);
+        newP[k].wd  = clamp(newP[k].wd  + nw(rng), 0.3, 1.0);
+        newP[k].eps = clamp(newP[k].eps + ne(rng), 0.1, 0.5);
+    }
+
+    particles[p] = newP;
+    pweights[p].assign(NP, 1.0 / NP);
+
+    estimated[p] = {0, 0, 0, 0, 0};
+    for (int k = 0; k < NP; k++) {
+        estimated[p].wa += newP[k].wa; estimated[p].wb += newP[k].wb;
+        estimated[p].wc += newP[k].wc; estimated[p].wd += newP[k].wd;
+        estimated[p].eps += newP[k].eps;
+    }
+    estimated[p].wa /= NP; estimated[p].wb /= NP;
+    estimated[p].wc /= NP; estimated[p].wd /= NP;
+    estimated[p].eps /= NP;
+}
+
+// ===================== AI MOVE GENERATION =====================
+int genAIMove(const State& s, int p, const Particle& param, mt19937& lr) {
+    MoveList ml;
+    getMovable(s, p, ml);
+    if (ml.cnt == 0) return s.p_pos[p];
+
+    uniform_real_distribution<double> uni(0.0, 1.0);
+    if (uni(lr) < param.eps) return ml.idx[lr() % ml.cnt];
+
+    double bestVal = -1e18;
+    int bestIdx[200], bestCnt = 0;
+    for (int k = 0; k < ml.cnt; k++) {
+        double val = aiEvalCell(s, p, ml.idx[k], param.wa, param.wb, param.wc, param.wd);
+        if (val > bestVal + 1e-12) { bestVal = val; bestCnt = 0; bestIdx[bestCnt++] = k; }
+        else if (val > bestVal - 1e-12) { bestIdx[bestCnt++] = k; }
+    }
+    int c = bestIdx[lr() % bestCnt];
+    return ml.idx[c];
+}
+
+// ===================== EVALUATION FUNCTION =====================
+double evaluate(const State& s, int currentTurn) {
+    double s0 = s.score(0);
+    double sa = 0;
+    for (int p = 1; p < M; p++) sa = max(sa, s.score(p));
+    if (sa < 1e-9) return 20.0;
+    double ratio = s0 / sa;
+
+    Bitboard reachMask = getReachableMask(s, 0);
+    int myReach = popcount128(reachMask);
     
-    double fld_old = 0;
-    for(int k=0; k<aff_k; k++) fld_old += get_fld_part(ns, aff_x[k], aff_y[k]);
-
-    int id = tx * 10 + ty;
-    int v = VV[tx][ty];
-
-    if (ns.own[id] == -1) {
-        // Capture empty cell
-        ns.own[id] = player;
-        ns.lev[id] = 1;
-        ns.px[player] = tx;
-        ns.py[player] = ty;
-        if (player == 0) ns.cached_vl += v;
-        if (player == g_top_player) ns.cached_top_vl += v;
-    } else if (ns.own[id] == player) {
-        // Strengthen own cell
-        if (ns.lev[id] < U) {
-            ns.lev[id]++;
-            if (player == 0) ns.cached_vl += v;
-            if (player == g_top_player) ns.cached_top_vl += v;
+    double expandPot = 0, levelPot = 0;
+    // Iterate reachable cells
+    Bitboard b = reachMask;
+    while(b) {
+        // Safe extraction
+        uint64_t lo = (uint64_t)b;
+        int i;
+        if(lo) { i = __builtin_ctzll(lo); b &= ~((Bitboard)1<<i); }
+        else   { uint64_t hi = (uint64_t)(b>>64); i = 64 + __builtin_ctzll(hi); b &= ~((Bitboard)1<<i); }
+        
+        // i is index
+        if (s.owner_map[i] == 0 && s.level[i] < U)
+            levelPot += V[i] * (U - s.level[i]);
+            
+        // Check neighbors for expansion (if neighbor is -1)
+        // Neighbors: left, right, up, down
+        // Left (i-1) if i%10 != 0
+        if (i % 10 != 0) {
+            int ni = i - 1;
+            if (s.owner_map[ni] == -1) expandPot += V[ni];
         }
-        ns.px[player] = tx;
-        ns.py[player] = ty;
+        // Right (i+1) if i%10 != 9
+        if (i % 10 != 9) {
+            int ni = i + 1;
+            if (s.owner_map[ni] == -1) expandPot += V[ni];
+        }
+        // Up (i-10) if i>=10
+        if (i >= 10) {
+            int ni = i - 10;
+            if (s.owner_map[ni] == -1) expandPot += V[ni];
+        }
+        // Down (i+10) if i<90
+        if (i < 90) {
+            int ni = i + 10;
+            if (s.owner_map[ni] == -1) expandPot += V[ni];
+        }
+    }
+
+    double remain = (double)(T - currentTurn) / T;
+    return log2(1.0 + ratio)
+           + HP.eval_expand * expandPot * remain
+           + HP.eval_level * levelPot * remain
+           + HP.eval_reach * myReach;
+}
+
+// ===================== PLAYER 0 GREEDY (rollout policy) =====================
+int greedyMove0(const State& s, int turn, mt19937& lr) {
+    MoveList ml;
+    getMovable(s, 0, ml);
+    if (ml.cnt == 0) return s.p_pos[0];
+
+    double phase = (double)turn / T;
+    double wa0, wb0, wc0, wd0;
+    if (phase < HP.phase1) {
+        wa0 = HP.wa_early; wb0 = HP.wb_early; wc0 = HP.wc_early; wd0 = HP.wd_early;
+    } else if (phase < HP.phase2) {
+        wa0 = HP.wa_mid; wb0 = HP.wb_mid; wc0 = HP.wc_mid; wd0 = HP.wd_mid;
     } else {
-        // Attack enemy cell
-        int old_owner = ns.own[id];
-        ns.lev[id]--;
-        if (ns.lev[id] == 0) {
-            // Level drops to 0: capture
-            if (old_owner == 0) ns.cached_vl -= v;
-            if (old_owner == g_top_player) ns.cached_top_vl -= v;
-            ns.own[id] = player;
-            ns.lev[id] = 1;
-            if (player == 0) ns.cached_vl += v;
-            if (player == g_top_player) ns.cached_top_vl += v;
-            ns.px[player] = tx;
-            ns.py[player] = ty;
-        } else {
-            // Level reduced but not captured (attacker gets bounced)
-            if (old_owner == 0) ns.cached_vl -= v;
-            if (old_owner == g_top_player) ns.cached_top_vl -= v;
-        }
+        wa0 = HP.wa_late; wb0 = HP.wb_late; wc0 = HP.wc_late; wd0 = HP.wd_late;
     }
-    
-    // FLD update
-    double fld_new = 0;
-    for(int k=0; k<aff_k; k++) fld_new += get_fld_part(ns, aff_x[k], aff_y[k]);
-    ns.cached_fld += (fld_new - fld_old);
+
+    int leader = 1; double leaderSc = s.score(1);
+    for (int p = 2; p < M; p++) { double sc = s.score(p); if (sc > leaderSc) { leaderSc = sc; leader = p; } }
+
+    double bestVal = -1e18;
+    int bestIdx[200], bestCnt = 0;
+    for (int k = 0; k < ml.cnt; k++) {
+        int idx = ml.idx[k];
+        int o = s.owner_map[idx];
+        double val;
+        if (o == -1) val = V[idx] * wa0;
+        else if (o == 0) val = (s.level[idx] < U) ? V[idx] * wb0 : -0.01;
+        else {
+            double mult = (o == leader) ? HP.leader_mult : 1.0;
+            val = ((s.level[idx] == 1) ? V[idx] * wc0 : V[idx] * wd0) * mult;
+        }
+        if (val > bestVal + 1e-12) { bestVal = val; bestCnt = 0; bestIdx[bestCnt++] = k; }
+        else if (val > bestVal - 1e-12) { bestIdx[bestCnt++] = k; }
+    }
+    int c = bestIdx[lr() % bestCnt];
+    return ml.idx[c];
 }
 
-// ===== Opponent simulation: all opponents (greedy) =====
-void sim_opponents_full(BState& ns) {
-    pair<int8_t,int8_t> opcands[100];
-    for (int p = 1; p < M; p++) {
-        int nc = get_cands(ns, p, opcands);
-        if (nc == 0) continue;
-        double best = -1e18;
-        int bx = ns.px[p], by = ns.py[p];
-        for (int i = 0; i < nc; i++) {
-            int x = opcands[i].first, y = opcands[i].second;
-            int id = x * 10 + y;
-            double v = VV[x][y];
-            double ev = 0;
-            if (ns.own[id] == -1)          ev = v * 0.65;
-            else if (ns.own[id] == p)      ev = (ns.lev[id] < U) ? v * 0.65 : 0;
-            else                           ev = v * 0.65; // Expectation of [0.3, 1.0] is 0.65 for both wc and wd
-            if (ev > best) { best = ev; bx = x; by = y; }
+// ===================== ROLLOUT =====================
+double rollout(State s, int startTurn, mt19937& lr) {
+    int endTurn = min(T, startTurn + HP.rollout_depth - 1);
+    int moves[8];
+    for (int t = startTurn; t <= endTurn; t++) {
+        moves[0] = greedyMove0(s, t, lr);
+        for (int p = 1; p < M; p++) {
+            moves[p] = genAIMove(s, p, estimated[p], lr);
         }
-        apply_move(ns, p, bx, by);
+        simulateTurn(s, moves);
     }
+    return evaluate(s, endTurn);
 }
 
-// ===== Opponent simulation: top player only =====
-void sim_top_only(BState& ns) {
-    pair<int8_t,int8_t> opcands[100];
-    int p = g_top_player;
-    int nc = get_cands(ns, p, opcands);
-    if (nc == 0) return;
-    double best = -1e18;
-    int bx = ns.px[p], by = ns.py[p];
-    for (int i = 0; i < nc; i++) {
-        int x = opcands[i].first, y = opcands[i].second;
-        int id = x * 10 + y;
-        double v = VV[x][y];
-        double ev = 0;
-        if (ns.own[id] == -1)          ev = v * 0.65;
-        else if (ns.own[id] == p)      ev = (ns.lev[id] < U) ? v * 0.65 : 0;
-        else                           ev = v * 0.65; // All equal expectation
-        if (ev > best) { best = ev; bx = x; by = y; }
-    }
-    apply_move(ns, p, bx, by);
-}
+// ===================== MCTS / SEARCH =====================
+struct Node {
+    State state;
+    int turn;
+    vector<int> legalMoves;
+    vector<pair<int, double>> children; // {move_idx, total_score}
+    vector<int> visits;
+    int totalVisits = 0;
 
-
-inline double quick_eval(const BState& bs, int tx, int ty, int turn) {
-    double v = VV[tx][ty];
-    double phase = (double)turn / T;
-    int id = tx * 10 + ty;
-
-    // Empty cell: claim it
-    if (bs.own[id] == -1) {
-        return v * (1.0 + P_QE_EMPTY_FUT * (U - 1)) * (1.5 - 0.5 * phase);
-    }
-
-    // Own cell: strengthen (with safety bonus)
-    if (bs.own[id] == 0) {
-        if (bs.lev[id] < U) {
-            int safe = 0;
-            for (int d = 0; d < 4; d++) {
-                int nx = tx + DX[d], ny = ty + DY[d];
-                if (nx < 0 || nx >= N || ny < 0 || ny >= N) safe++;
-                else if (bs.own[nx * 10 + ny] == 0) safe++;
-            }
-            double safety_mult = 1.0 + safe * P_SAFE_MULT;
-            return v * (0.8 + 0.6 * phase) * safety_mult;
-        }
-        return -1e9; // Already at max level
-    }
-
-    // Enemy territory: only attack top player
-    if (bs.own[id] != g_top_player) {
-        return -1e9; // Exclude non-top attacks
-    }
-
-    // Top player's cell: evaluate attack value
-    int lev = bs.lev[id];
-    int rem = T - turn;
-
-    // Estimate capture time: roughly lev turns
-    // If we have enough time and it's valuable, allow it.
-    
-    // Always allow Lv1 (high value)
-    if (lev == 1) {
-        double base = v * P_QE_CAPTURE;
-        if (phase > 0.4)
-            base += v * P_QE_ATK_BONUS * min(1.0, (phase - 0.4) * 2.0);
-        return base;
-    }
-
-    // For Lv >= 2, check if we have enough turns
-    // Heuristic: need `lev` turns to capture.
-    if (rem >= lev + 2) { // +2 buffer for movement/mistakes
-        // Base value: value * 1.0?
-        // Devalue slightly because it takes time.
-        // If v=16, lev=5, gaining 16 takes 5 turns. 3.2 per turn.
-        // Only worth if V is high or it hurts opponent a lot.
-        // For TOP player, hurting is worth double.
-        // value 16 -> gain 16, opp lose 16 -> diff 32.
-        // 32 / 5 = 6.4 per turn. Good.
-        return v * 1.0 - (lev * 5.0); // Simple penalty for time cost
-    }
-    
-    return -1e9; // Not enough time or not worth it
-}
-
-// ⑦ Dominance Bonus: V sum of empty cells reachable only by me (depth 4)
-// Bitboard-based implementation (Optimized)
-double calc_dominance(const BState& bs) {
-    if (P_DOMINANCE_W < 0.001) return 0;
-    
-    using BB = unsigned __int128;
-    BB my_trav = 0, top_trav = 0, empty_mask = 0;
-    for(int i=0; i<N; i++) {
-        for(int j=0; j<N; j++) {
-            int id = i*10 + j;
-            int o = bs.own[id];
-            BB bit = ((BB)1) << id;
-            if (o == -1) {
-                my_trav |= bit;
-                top_trav |= bit;
-                empty_mask |= bit;
-            } else if (o == 0) {
-                my_trav |= bit;
-            } else if (o == g_top_player) {
-                top_trav |= bit;
-            }
-        }
-    }
-    
-    auto expand = [&](BB curr) -> BB {
-        BB next = (curr >> 10) | (curr << 10);
-        const BB col0 = ((BB)0x1004010040100401ULL) | (((BB)0x4010040ULL) << 64);
-        const BB col9 = ((BB)0x802008020080200ULL) | (((BB)0x802008020ULL) << 64);
-        next |= ((curr & ~col0) >> 1);
-        next |= ((curr & ~col9) << 1);
-        return next;
-    };
-    
-    BB my_vis = ((BB)1) << (bs.px[0] * 10 + bs.py[0]);
-    BB top_vis = ((BB)1) << (bs.px[g_top_player] * 10 + bs.py[g_top_player]);
-    BB my_curr = my_vis, top_curr = top_vis;
-    BB top_reached = top_vis;
-    
-    double score = 0;
-    for(int d=0; d<4; d++) {
-        my_curr = expand(my_curr) & my_trav & ~my_vis;
-        my_vis |= my_curr;
+    Node(const State& s, int t) : state(s), turn(t) {
+        MoveList ml;
+        getMovable(s, 0, ml);
+        legalMoves.resize(ml.cnt);
+        for(int k=0; k<ml.cnt; k++) legalMoves[k] = ml.idx[k];
         
-        top_curr = expand(top_curr) & top_trav & ~top_vis;
-        top_vis |= top_curr;
-        top_reached |= top_curr;
-        
-        BB valid = my_curr & empty_mask & ~top_reached;
-        uint64_t lo = (uint64_t)valid;
-        uint64_t hi = (uint64_t)(valid >> 64);
-        while(lo) {
-            int id = __builtin_ctzll(lo);
-            score += VV[id/10][id%10];
-            lo &= (lo - 1);
-        }
-        while(hi) {
-            int bit = __builtin_ctzll(hi);
-            int id = bit + 64;
-            score += VV[id/10][id%10];
-            hi &= (hi - 1);
-        }
-    }
-    return score;
-}
-
-// ===== Evaluate: 5-component weighted linear combination =====
-// Components ①-④ + ratio computed here; ⑥ applied at beam extraction.
-double evaluate(const BState& bs, int turn, int depth) {
-    (void)depth;
-    double phase = (double)turn / T;
-
-    // ① VL total (from cache, no recomputation)
-    double vl = bs.cached_vl;
-
-    // ② Top player VL penalty (phase-gated with ramp)
-    double top_vl = bs.cached_top_vl;
-    double w_top = (phase > P_TOP_PHASE)
-        ? P_W_TOP * min(1.0, (phase - P_TOP_PHASE) / max(0.01, P_TOP_RAMP))
-        : 0.0;
-
-    double w_fld = P_W_FLD * (0.3 + phase * 0.7);         // ④ grows late
-    double fld = bs.cached_fld;
-
-    // Score ratio bonus (S_0/S_A awareness)
-
-    // Score ratio bonus (S_0/S_A awareness)
-    double ratio_w = (phase > P_RATIO_PHASE)
-        ? min(1.0, (phase - P_RATIO_PHASE) / 0.4) : 0.0;
-    double ratio_bonus = 0;
-    if (ratio_w > 0 && top_vl > 1.0) {
-        ratio_bonus = (vl / top_vl) * vl * P_RATIO_SCALE;
+        children.resize(ml.cnt);
+        visits.resize(ml.cnt, 0);
     }
 
-    // ⑦ Dominance
-    double dominance = calc_dominance(bs);
-
-    return vl                            // ① VL total
-         - w_top * top_vl                // ② Top penalty
-         + w_fld * fld                   // ④ Frontier diff
-         + ratio_w * ratio_bonus         // Ratio bonus
-         + dominance * P_DOMINANCE_W;    // ⑦ Dominance bonus
-}
-
-// ===== AI prediction for collision avoidance (⑥) =====
-pair<int,int> predict_ai_now(int player) {
-    uint64_t vis[2] = {0, 0};
-    pair<int8_t,int8_t> bq[100], cds[100];
-    int qh = 0, qt = 0, cnt = 0;
-
-    int sx = g_px[player], sy = g_py[player];
-    bset(vis, sx * 10 + sy);
-    bq[qt++] = {(int8_t)sx, (int8_t)sy};
-
-    while (qh < qt) {
-        int x = bq[qh].first, y = bq[qh].second;
-        qh++;
-
-        bool blk = false;
-        for (int p = 0; p < M; p++) {
-            if (p != player && g_px[p] == x && g_py[p] == y) {
-                blk = true;
-                break;
-            }
+    int select(mt19937& lr) {
+        int best = -1;
+        double bestScore = -1e18;
+        for (size_t i = 0; i < legalMoves.size(); i++) {
+            if (visits[i] == 0) return i; // Expansion
+            double avg = children[i].second / visits[i];
+            double uct = avg + HP.ucb_c * sqrt(log(totalVisits) / visits[i]);
+            if (uct > bestScore) { bestScore = uct; best = i; }
         }
-        if (!blk) cds[cnt++] = {(int8_t)x, (int8_t)y};
-
-        if (g_owner[x][y] == player) {
-            for (int d = 0; d < 4; d++) {
-                int nx = x + DX[d], ny = y + DY[d];
-                if (nx >= 0 && nx < N && ny >= 0 && ny < N) {
-                    int nid = nx * 10 + ny;
-                    if (!btest(vis, nid)) {
-                        bset(vis, nid);
-                        bq[qt++] = {(int8_t)nx, (int8_t)ny};
-                    }
-                }
-            }
-        }
+        return best;
     }
-
-    double best = -1e18;
-    int bx = sx, by = sy;
-    for (int i = 0; i < cnt; i++) {
-        int x = cds[i].first, y = cds[i].second;
-        double v = VV[x][y];
-        double ev = 0;
-        if (g_owner[x][y] == -1)          ev = v * 0.65;
-        else if (g_owner[x][y] == player) ev = (g_lv[x][y] < U) ? v * 0.65 : 0;
-        else                              ev = (g_lv[x][y] == 1) ? v * 0.65 : v * 0.30;
-        if (ev > best) { best = ev; bx = x; by = y; }
-    }
-    return {bx, by};
-}
-
-// ===== Chokudai Search =====
-struct ScoredCand {
-    double eval;
-    int8_t cx, cy;
 };
 
-pair<int,int> choose_move(int turn) {
-    const int MAX_D = min(6, T - turn);
-    const int MAX_C = 8;       // beam width for depth 1+
-    const int MAX_C0 = 20;     // beam width for depth 0
+pair<int,int> selectMove(State& rootState, int currentTurn) {
+    UndoData undo;
+    MoveList ml;
+    getMovable(rootState, 0, ml);
+    if (ml.cnt == 0) return {rootState.p_pos[0]/10, rootState.p_pos[0]%10};
 
-    // Time management
-    double t0 = elapsed_sec();
-    double t_rem = 1.93 - t0;
-    int t_left = T - turn;
-    int effective_left = max(1, t_left - 3);
-    double t_per = t_rem / max(1, effective_left);
-    double phase = (double)turn / T;
-    if (phase < 0.5) t_per *= 1.2;  // Spend more time early
-    double deadline = t0 + max(t_per, 0.002);
+    // Dynamic time management
+    double remTime = 1900.0 - elapsedMs();
+    int remTurns = T - currentTurn + 1;
+    double timeLimit = max(10.0, remTime / remTurns); 
+    double startT = elapsedMs();
 
-    if (P_MAX_ITERS > 0) deadline = 1e18; // Ignore time if using iter count
+    // Accumulators
+    vector<double> sumScore(ml.cnt, 0.0);
+    vector<int> counts(ml.cnt, 0);
 
-    compute_scores();
+    int iter = 0;
+    while (true) {
+        // Check time every 10 iterations
+        if ((iter & 15) == 0) {
+            if (elapsedMs() - startT > timeLimit) break;
+        }
 
-    // Initialize beams
-    vector<priority_queue<BState>> beams(MAX_D + 1);
+        int k = iter % ml.cnt; 
+        
+        int moves[8];
+        moves[0] = ml.idx[k];
+        for(int p=1; p<M; p++) moves[p] = genAIMove(rootState, p, estimated[p], rng);
+        
+        simulateTurn(rootState, moves, &undo);
+        double sc = evaluate(rootState, currentTurn + 1);
+        undoTurn(rootState, undo);
+        
+        sumScore[k] += sc;
+        counts[k]++;
+        iter++;
+    }
+    
+    // Find best average
+    int bestIdx = -1;
+    double bestScore = -1e18;
+    for (int k = 0; k < ml.cnt; k++) {
+        if (counts[k] == 0) continue;
+        double avg = sumScore[k] / counts[k];
+        if (avg > bestScore) {
+            bestScore = avg;
+            bestIdx = ml.idx[k];
+        }
+    }
+    
+    if (bestIdx == -1) bestIdx = ml.idx[0];
+    return {bestIdx/10, bestIdx%10};
+}
 
-    BState root;
-    root.cached_vl = 0;
-    root.cached_top_vl = 0;
+// ===================== MAIN =====================
+int main(int argc, char* argv[]) {
+    ios_base::sync_with_stdio(false);
+    cin.tie(nullptr);
+
+    initBitboards();
+
+    // Load hyperparameters from config file (optional)
+    if (argc >= 2) loadParams(argv[1]);
+
+    cin >> N >> M >> T >> U;
+
+    // Adapt hyperparams based on actual M, U
+    adaptParams();
+
     for (int i = 0; i < N; i++)
         for (int j = 0; j < N; j++) {
-            int id = i * 10 + j;
-            root.own[id] = (int8_t)g_owner[i][j];
-            root.lev[id] = (int8_t)g_lv[i][j];
-            if (g_owner[i][j] == 0)
-                root.cached_vl += VV[i][j] * g_lv[i][j];
-            else if (g_owner[i][j] == g_top_player)
-                root.cached_top_vl += VV[i][j] * g_lv[i][j];
+            int val; cin >> val;
+            V[i*10 + j] = val;
         }
-    // Init cached_fld
-    root.cached_fld = 0;
-    for(int i=0; i<N; i++)
-        for(int j=0; j<N; j++)
-             root.cached_fld += get_fld_part(root, i, j);
 
+    State state;
+    state.init();
     for (int p = 0; p < M; p++) {
-        root.px[p] = (int8_t)g_px[p];
-        root.py[p] = (int8_t)g_py[p];
-    }
-    root.fx = -1;
-    root.fy = -1;
-    root.score = evaluate(root, turn, 0);
-    beams[0].push(root);
-
-    pair<int8_t,int8_t> cds[100];
-    ScoredCand sc[100];
-
-    // Chokudai search loop
-    int iter = 0;
-    for (;;) {
-        if (P_MAX_ITERS > 0) {
-            if (iter >= P_MAX_ITERS) break;
-        } else {
-            if (!(iter & 3) && elapsed_sec() >= deadline) break;
-        }
-        iter++;
-
-        bool any = false;
-        for (int d = 0; d < MAX_D; d++) {
-            if (beams[d].empty()) continue;
-
-            BState bs = beams[d].top();
-            beams[d].pop();
-
-            int nc = get_cands(bs, 0, cds);
-            if (nc == 0) continue;
-
-            // Score and filter candidates
-            int nsc = 0;
-            for (int i = 0; i < nc; i++) {
-                int cx = cds[i].first, cy = cds[i].second;
-                int id = cx * 10 + cy;
-                if (bs.own[id] == 0 && bs.lev[id] >= U) continue; // Skip max-level own cells
-                sc[nsc++] = {quick_eval(bs, cx, cy, turn + d), (int8_t)cx, (int8_t)cy};
-            }
-
-            // Top-k selection
-            int lim = min(nsc, (d == 0) ? MAX_C0 : MAX_C);
-            if (nsc > lim) {
-                nth_element(sc, sc + lim, sc + nsc,
-                    [](const ScoredCand& a, const ScoredCand& b) {
-                        return a.eval > b.eval;
-                    });
-            }
-
-            // Expand top candidates
-            for (int i = 0; i < lim; i++) {
-                int cx = sc[i].cx, cy = sc[i].cy;
-                BState ns = bs;
-
-                apply_move(ns, 0, cx, cy);
-
-                // Depth-limited opponent simulation
-                if (d <= 1) {
-                    sim_opponents_full(ns);   // depth 0-1: all opponents
-                } else if (d == 2) {
-                    sim_top_only(ns);         // depth 2: top only
-                }
-                // depth 3+: skip opponent simulation
-
-                ns.fx = (d == 0) ? (int8_t)cx : bs.fx;
-                ns.fy = (d == 0) ? (int8_t)cy : bs.fy;
-                ns.score = evaluate(ns, turn + d + 1, d + 1);
-
-                beams[d + 1].push(ns);
-                any = true;
-            }
-        }
-        if (!any) break;
+        int x, y; cin >> x >> y;
+        int idx = x*10 + y;
+        state.p_pos[p] = idx;
+        state.owner_mask[p] |= ((Bitboard)1 << idx);
+        state.owner_map[idx] = p;
+        state.level[idx] = 1;
     }
 
-    // ===== Extract best move with ⑥ collision avoidance =====
-    BState best;
-    best.fx = -1;
-    best.fy = -1;
-    best.score = -1e18;
+    initAllParticles();
 
-    for (int d = MAX_D; d >= 1; d--) {
-        if (beams[d].empty()) continue;
+    for (int t = 1; t <= T; t++) {
+        State preTurnState = state;
 
-        // Extract top candidates from deepest beam
-        vector<BState> top;
-        while (!beams[d].empty() && (int)top.size() < 30) {
-            top.push_back(beams[d].top());
-            beams[d].pop();
+        auto [moveX, moveY] = selectMove(state, t);
+        cout << moveX << " " << moveY << "\n";
+        cout.flush();
+
+        int tx[8], ty[8], ex[8], ey[8];
+        for (int p = 0; p < M; p++) cin >> tx[p] >> ty[p];
+        for (int p = 0; p < M; p++) cin >> ex[p] >> ey[p];
+        
+        // Update state from input to be perfectly in sync with judge
+        // Actually, we should trust our simulation OR judge.
+        // AHC usually provides full state or delta.
+        // AHC061 provides full board state after moves.
+        
+        // State input format:
+        // N lines of owner
+        // N lines of level
+        for (int i = 0; i < N; i++)
+            for (int j = 0; j < N; j++) {
+                int owner; cin >> owner;
+                int idx = i*10 + j;
+                state.owner_map[idx] = owner;
+                // Rebuild masks is slow? No, 100 cells.
+                // We should clear masks and rebuild to be safe
+            }
+        
+        // Rebuild masks
+        for(int p=0; p<M; p++) state.owner_mask[p] = 0;
+        for(int i=0; i<100; i++) {
+            int o = state.owner_map[i];
+            if (o != -1) state.owner_mask[o] |= ((Bitboard)1 << i);
         }
 
-        // Predict AI targets for collision check
-        pair<int,int> ai_tgt[8];
+        for (int i = 0; i < N; i++)
+            for (int j = 0; j < N; j++) {
+                int l; cin >> l;
+                state.level[i*10 + j] = l;
+            }
+            
+        for (int p = 0; p < M; p++) { 
+            state.p_pos[p] = ex[p]*10 + ey[p]; 
+        }
+
         for (int p = 1; p < M; p++)
-            ai_tgt[p] = predict_ai_now(p);
-
-        // Apply collision penalties
-        for (auto& bs : top) {
-            for (int p = 1; p < M; p++) {
-                int dist = abs(g_px[p] - (int)bs.fx) + abs(g_py[p] - (int)bs.fy);
-                if (dist <= 1) bs.score -= P_COL_NEAR;
-                else if (dist == 2) bs.score -= P_COL_DIST2;
-                if (ai_tgt[p].first == (int)bs.fx && ai_tgt[p].second == (int)bs.fy)
-                    bs.score -= P_COL_TARGET;
-            }
-        }
-
-        // Pick best after collision adjustment
-        for (const auto& bs : top) {
-            if (bs.score > best.score) best = bs;
-        }
-        break;
+            updateParticles(preTurnState, p, tx[p], ty[p]);
     }
 
-    if (best.fx >= 0) return {best.fx, best.fy};
-
-    // Fallback: greedy on quick_eval
-    pair<int8_t,int8_t> fb_cds[100];
-    int fnc = get_cands(root, 0, fb_cds);
-    double fb_best = -1e18;
-    int fbx = g_px[0], fby = g_py[0];
-    for (int i = 0; i < fnc; i++) {
-        int cx = fb_cds[i].first, cy = fb_cds[i].second;
-        double ev = quick_eval(root, cx, cy, turn);
-        if (ev > fb_best) { fb_best = ev; fbx = cx; fby = cy; }
-    }
-    return {fbx, fby};
-}
-
-// ===== Main =====
-int main() {
-    ios::sync_with_stdio(false);
-    cin.tie(nullptr);
-    cout.tie(nullptr);
-    G_START = chrono::high_resolution_clock::now();
-    read_params();
-
-    read_initial();
-    for (int turn = 0; turn < T; turn++) {
-        auto [tx, ty] = choose_move(turn);
-        cout << tx << " " << ty << endl;
-        read_turn();
-    }
     return 0;
 }

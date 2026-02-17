@@ -1,293 +1,486 @@
-#!/usr/bin/env python3
 """
-AHC061 Parameter Tuning with Optuna
+AHC Multi-Player Territory Game - Optuna Hyperparameter Tuning
+==============================================================
 
-環境変数経由で C++ ソルバーのパラメータを動的に変更し、
-Optuna の TPE サンプラーで最適化を行う。
-
-Usage:
-    pip install optuna
-    python scripts/optuna_tune.py                     # デフォルト: 50ケース, 100トライアル
-    python scripts/optuna_tune.py -n 100 -t 200       # 100ケース, 200トライアル
-    python scripts/optuna_tune.py -j 8                # 8並列ワーカー
-    python scripts/optuna_tune.py --no-build          # ビルドをスキップ
-    python scripts/optuna_tune.py --db optuna_v7.db   # 新しいDBで回す
-
-Params: 15 (TOP_RAMP, APPROACH_RADIUS は固定、評価6要素の主要重みをチューニング)
+使い方 (プロジェクトルート A/ から実行):
+  1. make でビルド
+  2. python scripts/optuna_tune.py --tune --n_trials 100
+  3. python scripts/optuna_tune.py --show_best
+  4. python scripts/optuna_tune.py --export best_params.cfg
+  5. python scripts/embed_params.py best_params.cfg src/main.cpp > submissions/main_tuned.cpp
 """
 
-import optuna
-import subprocess
+import argparse
 import os
 import re
+import subprocess
 import sys
-import argparse
+import tempfile
 import time
-from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from pathlib import Path
 
-# ===== Configuration =====
-BASE_DIR = Path(__file__).resolve().parent.parent
-TOOLS_DIR = BASE_DIR / "tools"
-INPUT_DIR = TOOLS_DIR / "in"
+import optuna
+from optuna.samplers import TPESampler
 
-# OS-aware solver path
-if sys.platform == "win32":
-    SOLVER_PATH = BASE_DIR / "build" / "main.exe"
-else:
-    SOLVER_PATH = BASE_DIR / "build" / "main"
+# ===================== CONFIGURATION =====================
+# All paths relative to project root (A/)
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
 
-# Parameter definitions: (optuna_name, env_name, default, low, high)
-PARAM_DEFS = [
-    # === ④ Frontier level differential ===
-    ("W_FLD",        "P_W_FLD",        1.340033,  0.3,   2.5),
-
-    # === ② Top player VL penalty ===
-    ("W_TOP",        "P_W_TOP",        1.489227,  0.1,   2.5),
-    ("TOP_PHASE",    "P_TOP_PHASE",    0.201841,  0.05,  0.7),
-    ("TOP_RAMP",     "P_TOP_RAMP",     0.3,       0.1,   0.5),
-
-    # === ③ Dominance bonus ===
-    ("DOMINANCE_W",     "P_DOMINANCE_W",     2.724709,  0.0,   10.0),
-
-    # === Score ratio bonus ===
-    ("RATIO_SCALE",  "P_RATIO_SCALE",  0.842358,  0.1,   3.0),
-    ("RATIO_PHASE",  "P_RATIO_PHASE",  0.548726,  0.05,  0.8),
-
-    # === Quick eval ===
-    ("QE_CAPTURE",   "P_QE_CAPTURE",   4.812494,  0.5,   10.0),
-    ("QE_ATK_BONUS", "P_QE_ATK_BONUS", 3.970362,  0.5,   10.0),
-    ("QE_EMPTY_FUT", "P_QE_EMPTY_FUT", 0.288185,  0.05,  1.0),
-    ("SAFE_MULT",    "P_SAFE_MULT",    0.364951,  0.0,   1.0),
-
-    # === ⑥ Collision avoidance ===
-    ("COL_NEAR",     "P_COL_NEAR",     265.893313,     30.0,  500.0),
-    ("COL_DIST2",    "P_COL_DIST2",    72.552670,      10.0,  200.0),
-    ("COL_TARGET",   "P_COL_TARGET",   163.330775,     20.0,  400.0),
-]
+SOLUTION_BIN = str(PROJECT_ROOT / "build" / "main.exe")
+MAIN_CPP = str(PROJECT_ROOT / "src" / "main.cpp")
+TESTER_BIN = str(PROJECT_ROOT / "tools" / "target" / "release" / "tester.exe")
+TESTCASE_DIR = str(PROJECT_ROOT / "tools" / "in")
+COMPILE_CMD = "g++ -std=c++23 -O2 -Wall -static -o build/main.exe src/main.cpp"
+DB_PATH = f"sqlite:///{PROJECT_ROOT / 'optuna_ahc.db'}"
+STUDY_NAME = "ahc_bitboard"
+TIMEOUT_SEC = 10  # 1テストケースあたりのタイムアウト
 
 
-def build_solver():
-    """ソルバーをビルドする"""
-    print("Building solver...")
-    result = subprocess.run(
-        ["make"],
-        cwd=str(BASE_DIR),
-        capture_output=True,
-        text=True,
-        shell=True,
-    )
-    if result.returncode != 0:
-        print(f"Build failed:\n{result.stderr}")
-        sys.exit(1)
-    if not SOLVER_PATH.exists():
-        print(f"Error: Solver not found at {SOLVER_PATH}")
-        sys.exit(1)
-    print(f"Build complete: {SOLVER_PATH}")
+# ===================== PARAMETER EXTRACTION =====================
+def get_default_params_from_cpp(cpp_path: str) -> dict:
+    """main.cpp から現在のパラメータ初期値を読み取る"""
+    defaults = {}
+    if not os.path.exists(cpp_path):
+        print(f"[WARN] {cpp_path} が見つかりません。デフォルト値を取得できませんでした。")
+        return defaults
 
+    with open(cpp_path, "r", encoding="utf-8") as f:
+        content = f.read()
 
-def run_single_case(args):
-    """テスターを通じて1テストケースを実行し、スコアを返す"""
-    input_file, env = args
-    try:
-        with open(input_file, 'r') as f_in:
-            result = subprocess.run(
-                ["cargo", "run", "-q", "-r", "--bin", "tester", str(SOLVER_PATH)],
-                stdin=f_in,
-                capture_output=True,
-                text=True,
-                cwd=str(TOOLS_DIR),
-                timeout=30,
-                env=env,
-            )
-        match = re.search(r"Score = (\d+)", result.stderr)
-        if match:
-            return int(match.group(1))
-        return 0
-    except subprocess.TimeoutExpired:
-        return 0
-    except Exception:
-        return 0
-
-
-def evaluate_params(params_env, input_files, n_jobs, max_iters=-1):
-    """パラメータセットを全テストケースで評価する"""
-    env = os.environ.copy()
-    for k, v in params_env.items():
-        env[k] = f"{v:.6f}"
+    # struct HyperParams { ... } ブロックを探す (簡易的な検索)
+    # double phase1 = 0.20818362;
+    # int rollout_depth = 3;
     
-    if max_iters > 0:
-        env["P_MAX_ITERS"] = str(max_iters)
-
-    tasks = [(f, env) for f in input_files]
-    scores = []
-
-    with ProcessPoolExecutor(max_workers=n_jobs) as executor:
-        futures = [executor.submit(run_single_case, t) for t in tasks]
-        for future in as_completed(futures):
-            scores.append(future.result())
-
-    return sum(scores), scores
-
-
-def create_objective(input_files, n_jobs, max_iters):
-    """Optuna の objective 関数を作成する"""
-
-    def objective(trial):
-        # パラメータをサジェスト
-        params_env = {}
-        for optuna_name, env_name, default, low, high in PARAM_DEFS:
-            val = trial.suggest_float(optuna_name, low, high)
-            params_env[env_name] = val
-
-        # テストケースで評価
-        total, scores = evaluate_params(params_env, input_files, n_jobs, max_iters)
-        valid = [s for s in scores if s > 0]
-        avg = total / len(scores) if scores else 0
-        min_s = min(valid) if valid else 0
-        max_s = max(valid) if valid else 0
-
-        print(f"  Trial {trial.number:>3d}: Total={total:>8d}  "
-              f"Avg={avg:>6.0f}  Min={min_s:>5d}  Max={max_s:>5d}")
-
-        return total
-
-    return objective
+    # 浮動小数点数
+    float_matches = re.findall(r'double\s+(\w+)\s*=\s*([\d.]+);', content)
+    for name, val in float_matches:
+        defaults[name] = float(val)
+        
+    # 整数
+    int_matches = re.findall(r'int\s+(\w+)\s*=\s*(\d+);', content)
+    for name, val in int_matches:
+        defaults[name] = int(val)
+        
+    print(f"[INFO] main.cpp から {len(defaults)} 個のデフォルト値を読み込みました")
+    return defaults
 
 
+# ===================== PARAMETER SPACE DEFINITION =====================
+def define_params(trial: optuna.Trial, defaults: dict) -> dict:
+    """Optunaのトライアルからハイパーパラメータを生成する"""
+    params = {}
+
+    # === Search Space (Focused for Optimization) ===
+    # 探索空間を絞り、重要なパラメータのみを探索する。
+    # Phase境界やGreedy重みは固定し、探索パラメータとして定義しない(=main.cppのデフォルト値を使用)。
+
+    # --- TUNED PARAMETERS ---
+
+    # 1. Strategy & Search
+    # UCB定数: 探索と活用のバランス
+    params["ucb_c"] = trial.suggest_float("ucb_c", 0.5, 3.0)
+    
+    # Rollout Depth: 深読みの手数 (Bitboard化で深くできる可能性)
+    params["rollout_depth"] = trial.suggest_int("rollout_depth", 3, 20)
+    
+    # Beam Search
+    params["beam_width"] = trial.suggest_int("beam_width", 10, 1500)
+    params["beam_depth"] = trial.suggest_int("beam_depth", 5, 50)
+    
+    # Leader Multiplier: トッププレイヤーへの攻撃意欲
+    params["leader_mult"] = trial.suggest_float("leader_mult", 0.8, 1.8)
+
+    # 2. Evaluation Function Coefficients (Log scale)
+    # 拡張、レベル上げ、連結成分などの評価重み。初期値周辺を探る。
+    # Log scale探索なので、0に近い値も探索範囲に入れたい。
+    low_e = 1e-6
+    params["eval_expand"] = trial.suggest_float("eval_expand", low_e, 1e-3, log=True)
+    params["eval_level"]  = trial.suggest_float("eval_level",  low_e, 1e-3, log=True)
+    params["eval_reach"]  = trial.suggest_float("eval_reach",  1e-5,  1e-2, log=True)
+
+    # 3. Particle Filter
+    # 粒子数とノイズ
+    params["num_particles"] = trial.suggest_int("num_particles", 100, 500)
+    # ノイズは小さすぎると収束しすぎる、大きすぎると発散する
+    params["pf_noise_w"]   = trial.suggest_float("pf_noise_w",   0.001, 0.1, log=True)
+    params["pf_noise_eps"] = trial.suggest_float("pf_noise_eps", 0.001, 0.1, log=True)
+
+    # 4. Input Adaptive Parameters
+    # UやMに応じた補正係数
+    params["u_wb_boost"]     = trial.suggest_float("u_wb_boost", 0.0, 1.0)
+    params["u_wd_penalty"]   = trial.suggest_float("u_wd_penalty", 0.0, 1.0)
+    params["m_leader_scale"] = trial.suggest_float("m_leader_scale", 0.0, 0.3)
+
+    # --- FIXED PARAMETERS (Implicitly used by omission) ---
+    # 以下のパラメータは define_params に含めないことで、
+    # configファイルに出力されず、main.cpp のデフォルト値が使われる。
+    # phase1, phase2
+    # wa_early, wb_early, ... wd_late (計12個)
+
+    return params
+
+
+# ===================== PARAMETER FILE I/O =====================
+def write_param_file(params: dict, filepath: str):
+    """パラメータをconfigファイルに書き出す"""
+    with open(filepath, "w") as f:
+        for key, val in params.items():
+            f.write(f"{key} {val}\n")
+
+
+def read_param_file(filepath: str) -> dict:
+    """configファイルからパラメータを読み込む"""
+    params = {}
+    with open(filepath) as f:
+        for line in f:
+            parts = line.strip().split()
+            if len(parts) == 2:
+                params[parts[0]] = float(parts[1])
+    return params
+
+
+# ===================== TEST CASE MANAGEMENT =====================
+def get_testcases() -> list:
+    """テストケースのパスリストを返す"""
+    tc_dir = Path(TESTCASE_DIR)
+    if not tc_dir.exists():
+        print(f"[ERROR] テストケースディレクトリ '{TESTCASE_DIR}' が見つかりません")
+        print("  make gen でテストケースを生成してください")
+        sys.exit(1)
+
+    cases = sorted(tc_dir.glob("*.txt"))
+    if not cases:
+        print(f"[ERROR] '{TESTCASE_DIR}' にテストケースが見つかりません")
+        sys.exit(1)
+
+    return [str(c) for c in cases]
+
+
+# ===================== SINGLE RUN =====================
+def run_single(testcase_path: str, param_file: str) -> float:
+    """
+    1つのテストケースに対してソリューションを実行し、絶対スコアを返す。
+    AHCテスタ形式: tester.exe solution_binary [args] < input
+    """
+    try:
+        # AHCテスタ: tester solution param_file < testcase
+        with open(testcase_path, "r") as tc_input:
+            result = subprocess.run(
+                [TESTER_BIN, SOLUTION_BIN, param_file],
+                stdin=tc_input,
+                capture_output=True, text=True,
+                timeout=TIMEOUT_SEC,
+                cwd=str(PROJECT_ROOT)
+            )
+
+        stderr = result.stderr
+        stdout = result.stdout
+
+        # スコアのパース
+        score = None
+        for line in (stderr + "\n" + stdout).split("\n"):
+            m = re.search(r'[Ss]core\s*[=:]\s*([\d.]+)', line)
+            if m:
+                score = float(m.group(1))
+                break
+
+        if score is None:
+            for line in reversed(stderr.strip().split("\n")):
+                line = line.strip()
+                if line and re.match(r'^[\d.]+$', line):
+                    score = float(line)
+                    break
+
+        if score is None:
+            # print(f"[WARN] スコアをパースできません: {testcase_path}")
+            return 0.0
+
+        return score
+
+    except subprocess.TimeoutExpired:
+        # print(f"[WARN] タイムアウト: {testcase_path}")
+        return 0.0
+    except Exception as e:
+        print(f"[WARN] 実行エラー: {testcase_path}: {e}")
+        return 0.0
+
+
+# Global config set by main()
+N_JOBS = 1
+MAX_CASES = 0
+CACHED_DEFAULTS = {}
+
+
+def run_all_cases(param_file: str) -> list:
+    """全テストケースを実行してスコアリストを返す (並列対応)"""
+    testcases = get_testcases()
+    if MAX_CASES > 0:
+        testcases = testcases[:MAX_CASES]
+
+    if N_JOBS <= 1:
+        return [run_single(tc, param_file) for tc in testcases]
+    else:
+        scores = [0.0] * len(testcases)
+        with ProcessPoolExecutor(max_workers=N_JOBS) as executor:
+            futures = {executor.submit(run_single, tc, param_file): i
+                       for i, tc in enumerate(testcases)}
+            for future in as_completed(futures):
+                idx = futures[future]
+                scores[idx] = future.result()
+        return scores
+
+
+def categorize_testcases() -> dict:
+    """テストケースを (M, U) カテゴリに分類"""
+    testcases = get_testcases()
+    if MAX_CASES > 0:
+        testcases = testcases[:MAX_CASES]
+
+    categories = {}  # (m_cat, u_cat) -> [index]
+    for i, tc in enumerate(testcases):
+        with open(tc) as f:
+            first_line = f.readline().strip().split()
+            _n, m, _t, u = int(first_line[0]), int(first_line[1]), int(first_line[2]), int(first_line[3])
+        m_cat = "low" if m <= 3 else ("mid" if m <= 5 else "high")
+        u_cat = "low" if u <= 2 else ("mid" if u <= 3 else "high")
+        key = (m_cat, u_cat)
+        if key not in categories:
+            categories[key] = []
+        categories[key].append(i)
+    return categories
+
+
+# ===================== OBJECTIVE FUNCTION =====================
+def objective_global(trial: optuna.Trial) -> float:
+    """全テストケースの平均スコアを最大化"""
+    params = define_params(trial, CACHED_DEFAULTS)
+
+    param_file = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".cfg", delete=False, prefix="optuna_params_"
+    )
+    write_param_file(params, param_file.name)
+    param_file.close()
+
+    try:
+        scores = run_all_cases(param_file.name)
+        return sum(scores) / len(scores) if scores else 0.0
+    finally:
+        try:
+            os.unlink(param_file.name)
+        except:
+            pass
+
+
+def objective_stratified(trial: optuna.Trial) -> float:
+    """M/Uカテゴリ均等で平均スコアを最大化"""
+    params = define_params(trial, CACHED_DEFAULTS)
+
+    param_file = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".cfg", delete=False, prefix="optuna_params_"
+    )
+    write_param_file(params, param_file.name)
+    param_file.close()
+
+    try:
+        scores = run_all_cases(param_file.name)
+        cat_map = categorize_testcases()
+
+        cat_avgs = []
+        for key, indices in cat_map.items():
+            cat_scores = [scores[i] for i in indices]
+            if cat_scores:
+                cat_avgs.append(sum(cat_scores) / len(cat_scores))
+
+        return sum(cat_avgs) / len(cat_avgs) if cat_avgs else 0.0
+    finally:
+        try:
+            os.unlink(param_file.name)
+        except:
+            pass
+
+
+# ===================== MAIN =====================
 def main():
     parser = argparse.ArgumentParser(
-        description="AHC061 Parameter Tuning with Optuna",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python scripts/optuna_tune.py                  # 50 cases, 100 trials
-  python scripts/optuna_tune.py -n 100 -t 200    # 100 cases, 200 trials
-  python scripts/optuna_tune.py -j 8             # 8 parallel workers
-        """,
+        description="AHC Solution - Optuna Hyperparameter Tuning",
+        formatter_class=argparse.RawTextHelpFormatter
     )
-    parser.add_argument("-n", "--num-cases", type=int, default=50,
-                        help="テストケース数 (default: 50)")
-    parser.add_argument("-t", "--trials", type=int, default=100,
-                        help="Optunaトライアル数 (default: 100)")
-    parser.add_argument("-j", "--jobs", type=int, default=4,
-                        help="並列ワーカー数 (default: 4)")
-    parser.add_argument("-i", "--iters", type=int, default=2000,
-                        help="1ターンあたりの最大試行回数 (default: 2000, -1で時間指定)")
-    parser.add_argument("--no-build", action="store_true",
-                        help="ソルバーのビルドをスキップ")
-    parser.add_argument("--db", type=str, default=None,
-                         help="SQLiteデータベースパス (default: optuna_ahc061_v10.db)")
+    parser.add_argument("--tune", action="store_true",
+                        help="Optunaでチューニングを実行")
+    parser.add_argument("--show_best", action="store_true",
+                        help="最良パラメータを表示")
+    parser.add_argument("--export", type=str, default=None,
+                        help="最良パラメータをcfgファイルに出力")
+    parser.add_argument("--compile", action="store_true",
+                        help="ソリューションをコンパイル")
+    parser.add_argument("--eval", type=str, default=None,
+                        help="指定cfgファイルで全テストケースを評価")
+    parser.add_argument("--n_trials", type=int, default=100,
+                        help="Optunaのトライアル数")
+    parser.add_argument("--jobs", type=int, default=1,
+                        help="並列実行数 (テストケース内の並列)")
+    parser.add_argument("--strategy", type=str, default="global",
+                        choices=["global", "stratified"],
+                        help="最適化戦略: global=全体平均, stratified=M/Uカテゴリ均等")
+    parser.add_argument("--study_name", type=str, default=STUDY_NAME,
+                        help="Optuna study名")
+    parser.add_argument("--db", type=str, default=DB_PATH,
+                        help="Optuna DBパス")
+    parser.add_argument("--max_cases", type=int, default=0,
+                        help="使用するテストケース数を制限 (0=全件)")
     args = parser.parse_args()
 
-    # ソルバーをビルド
-    if not args.no_build:
-        build_solver()
-    elif not SOLVER_PATH.exists():
-        print(f"Error: Solver not found at {SOLVER_PATH}. Run 'make' first.")
-        sys.exit(1)
+    print(f"[INFO] Project root: {PROJECT_ROOT}")
+    print(f"[INFO] Solution:     {SOLUTION_BIN}")
+    print(f"[INFO] Tester:       {TESTER_BIN}")
 
-    # テストケースを取得
-    input_files = sorted(INPUT_DIR.glob("*.txt"))[:args.num_cases]
-    if not input_files:
-        print(f"Error: No test cases found in {INPUT_DIR}")
-        print("Run 'make gen' to generate test cases first.")
-        sys.exit(1)
+    # Set global config
+    global N_JOBS, MAX_CASES, CACHED_DEFAULTS
+    N_JOBS = args.jobs
+    MAX_CASES = args.max_cases
+    
+    # Load defaults always
+    CACHED_DEFAULTS = get_default_params_from_cpp(MAIN_CPP)
 
-    print(f"{'=' * 60}")
-    print(f"  AHC061 Optuna Parameter Tuning")
-    print(f"{'=' * 60}")
-    print(f"  Test cases : {len(input_files)}")
-    print(f"  Trials     : {args.trials}")
-    print(f"  Workers    : {args.jobs}")
-    print(f"  Parameters : {len(PARAM_DEFS)}")
-    print(f"  Solver     : {SOLVER_PATH}")
-    print(f"{'=' * 60}")
+    if args.compile:
+        print(f"[INFO] コンパイル中: {COMPILE_CMD}")
+        result = subprocess.run(COMPILE_CMD, shell=True, capture_output=True, text=True,
+                                cwd=str(PROJECT_ROOT))
+        if result.returncode != 0:
+            print(f"[ERROR] コンパイル失敗:\n{result.stderr}")
+            sys.exit(1)
+        print("[OK] コンパイル成功")
 
-    # ベースライン実行（デフォルトパラメータ）
-    print(f"\n[Baseline] Running with default parameters (iters={args.iters})...")
-    baseline_total, baseline_scores = evaluate_params({}, input_files, args.jobs, args.iters)
-    baseline_avg = baseline_total / len(baseline_scores) if baseline_scores else 0
-    print(f"[Baseline] Total={baseline_total}  Avg={baseline_avg:.0f}")
-    print(f"{'=' * 60}")
+    if args.tune:
+        if not os.path.exists(SOLUTION_BIN):
+            print(f"[ERROR] {SOLUTION_BIN} が見つかりません。make または --compile で先にコンパイルしてください")
+            sys.exit(1)
+        if not os.path.exists(TESTER_BIN):
+            print(f"[ERROR] {TESTER_BIN} が見つかりません。cd tools && cargo build -r でビルドしてください")
+            sys.exit(1)
 
-    # Optuna study の作成（新しいDBで試す場合は --db で別名を指定）
-    # v10: new parameters (DIST_ENEMY) added
-    db_path = args.db or str(BASE_DIR / "optuna_ahc061_v10.db")
-    storage = f"sqlite:///{db_path}"
+        testcases = get_testcases()
+        if MAX_CASES > 0:
+            testcases = testcases[:MAX_CASES]
 
-    # Optuna のログレベルを調整
-    optuna.logging.set_verbosity(optuna.logging.WARNING)
+        print(f"[INFO] テストケース数: {len(testcases)}")
+        print(f"[INFO] トライアル数: {args.n_trials}")
+        print(f"[INFO] 最適化戦略: {args.strategy}")
+        print(f"[INFO] 並列数: {N_JOBS}")
 
-    study = optuna.create_study(
-        direction="maximize",
-        study_name="ahc061_params_v10",
-        storage=storage,
-        load_if_exists=True,
-    )
+        # Optuna study作成
+        sampler = TPESampler(seed=42, n_startup_trials=20)
+        pruner = optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=3)
+        
+        study = optuna.create_study(
+            study_name=args.study_name,
+            storage=args.db,
+            direction="maximize",
+            sampler=sampler,
+            pruner=pruner,
+            load_if_exists=True
+        )
 
-    # デフォルト値を最初のトライアルとして登録
-    default_params = {name: default for name, _, default, _, _ in PARAM_DEFS}
-    study.enqueue_trial(default_params)
+        # Enqueue current parameters as the first trial!
+        tuned_param_names = [
+            "ucb_c", "rollout_depth", "leader_mult",
+            "beam_width", "beam_depth",
+            "eval_expand", "eval_level", "eval_reach",
+            "num_particles", "pf_noise_w", "pf_noise_eps",
+            "u_wb_boost", "u_wd_penalty", "m_leader_scale"
+        ]
+        
+        initial_params = {}
+        for name in tuned_param_names:
+            if name in CACHED_DEFAULTS:
+                initial_params[name] = CACHED_DEFAULTS[name]
+        
+        if initial_params:
+            print("[INFO] 現在のデフォルト値を初期トライアルとしてキューに追加します:")
+            for k, v in initial_params.items():
+                print(f"  {k}: {v}")
+            study.enqueue_trial(initial_params)
+        else:
+            print("[WARN] デフォルト値の抽出に失敗したか、対象パラメータが見つかりませんでした。初期値をキューに追加しません。")
 
-    # 最適化実行
-    print(f"\nStarting optimization ({args.trials} trials)...")
-    print(f"{'─' * 60}")
+        # 目的関数の選択
+        obj_func = objective_stratified if args.strategy == "stratified" else objective_global
 
-    objective = create_objective(input_files, args.jobs, args.iters)
-    start_time = time.time()
+        print(f"[INFO] 最適化開始...")
+        start_time = time.time()
+        study.optimize(obj_func, n_trials=args.n_trials, show_progress_bar=True)
+        elapsed = time.time() - start_time
+        
+        print(f"\n[OK] 最適化完了 ({elapsed:.1f}秒)")
+        print(f"[BEST] スコア: {study.best_value:.2f}")
+        print(f"[BEST] パラメータ:")
+        for k, v in study.best_params.items():
+            print(f"  {k}: {v}")
 
-    try:
-        study.optimize(objective, n_trials=args.trials)
-    except KeyboardInterrupt:
-        print("\n\nOptimization interrupted by user.")
-        print("Results so far are saved to the database.")
+    if args.show_best:
+        try:
+            study = optuna.load_study(
+                study_name=args.study_name,
+                storage=args.db
+            )
+            print(f"[BEST] スコア: {study.best_value:.2f}")
+            print(f"[BEST] パラメータ:")
+            for k, v in sorted(study.best_params.items()):
+                print(f"  {k}: {v}")
+            print(f"\n[INFO] 完了トライアル数: {len(study.trials)}")
+            
+            trials = sorted(study.trials, key=lambda t: t.value if t.value else 0, reverse=True)
+            print("\n[TOP5]")
+            for i, t in enumerate(trials[:5]):
+                print(f"  #{i+1}: score={t.value:.2f} (trial {t.number})")
 
-    elapsed = time.time() - start_time
+        except Exception as e:
+            print(f"[ERROR] Study読み込み失敗: {e}")
 
-    # ===== 結果表示 =====
-    print(f"\n{'=' * 60}")
-    print(f"  OPTIMIZATION RESULTS")
-    print(f"{'=' * 60}")
-    print(f"  Elapsed    : {elapsed/60:.1f} minutes")
-    print(f"  Trials     : {len(study.trials)}")
-    print(f"  Best trial : #{study.best_trial.number}")
-    print(f"  Best score : {study.best_value}")
-    print(f"  Baseline   : {baseline_total}")
+    if args.export:
+        try:
+            study = optuna.load_study(
+                study_name=args.study_name,
+                storage=args.db
+            )
+            export_path = PROJECT_ROOT / args.export
+            write_param_file(study.best_params, str(export_path))
+            print(f"[OK] 最良パラメータを {export_path} に出力しました")
 
-    if baseline_total > 0:
-        improvement = (study.best_value - baseline_total) / baseline_total * 100
-        print(f"  Improvement: {improvement:+.2f}%")
+            # 提出用: パラメータをC++のデフォルト値として埋め込むコードも生成
+            cpp_file = str(export_path).replace(".cfg", "_hardcoded.txt")
+            with open(cpp_file, "w") as f:
+                f.write("// === Optuna最適パラメータ (C++埋め込み用) ===\n")
+                f.write("// solution.cppのHyperParams構造体のデフォルト値を置き換えてください\n\n")
+                for k, v in sorted(study.best_params.items()):
+                    if k in ("rollout_depth", "num_particles"):
+                        f.write(f"    // HP.{k} = {int(v)};\n")
+                    else:
+                        f.write(f"    // HP.{k} = {v:.6f};\n")
+            print(f"[OK] C++埋め込み用コードを {cpp_file} に出力しました")
 
-    print(f"\n{'─' * 60}")
-    print(f"  Best Parameters:")
-    print(f"{'─' * 60}")
-    for optuna_name, env_name, default, _, _ in PARAM_DEFS:
-        best_val = study.best_params[optuna_name]
-        diff = best_val - default
-        arrow = "↑" if diff > 0 else "↓" if diff < 0 else "="
-        print(f"  {optuna_name:<14s} = {best_val:>10.6f}  (default: {default:>8.4f})  {arrow}")
+        except Exception as e:
+            print(f"[ERROR] {e}")
 
-    # C++ コードスニペット出力
-    print(f"\n{'─' * 60}")
-    print(f"  Copy to main.cpp (replace defaults):")
-    print(f"{'─' * 60}")
-    for optuna_name, env_name, default, _, _ in PARAM_DEFS:
-        best_val = study.best_params[optuna_name]
-        print(f"double {env_name:<14s} = {best_val:.6f};")
+    if args.eval:
+        eval_path = str(PROJECT_ROOT / args.eval) if not os.path.isabs(args.eval) else args.eval
+        if not os.path.exists(eval_path):
+            print(f"[ERROR] パラメータファイル '{eval_path}' が見つかりません")
+            sys.exit(1)
 
-    # Top 5 トライアル
-    print(f"\n{'─' * 60}")
-    print(f"  Top 5 Trials:")
-    print(f"{'─' * 60}")
-    trials_sorted = sorted(study.trials, key=lambda t: t.value if t.value else 0, reverse=True)
-    for i, trial in enumerate(trials_sorted[:5]):
-        score = trial.value if trial.value else 0
-        print(f"  #{trial.number:>3d}: Score={score:>8.0f}")
-
-    print(f"\n{'=' * 60}")
-    print(f"  Database saved to: {db_path}")
-    print(f"{'=' * 60}")
+        testcases = get_testcases()
+        if MAX_CASES > 0:
+            testcases = testcases[:MAX_CASES]
+        print(f"[INFO] {eval_path} で {len(testcases)} ケースを評価中... (並列数: {N_JOBS})")
+        scores = run_all_cases(eval_path)
+        for i, (tc, score) in enumerate(zip(testcases, scores)):
+            print(f"  [{i+1}/{len(testcases)}] {Path(tc).name}: {score:.2f}")
+        
+        avg = sum(scores) / len(scores)
+        print(f"\n[RESULT] 平均スコア: {avg:.2f}")
+        print(f"[RESULT] 最小: {min(scores):.2f}, 最大: {max(scores):.2f}")
 
 
 if __name__ == "__main__":
