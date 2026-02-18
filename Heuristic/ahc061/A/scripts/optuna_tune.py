@@ -69,26 +69,56 @@ def get_default_params_from_cpp(cpp_path: str) -> dict:
 
 # ===================== PARAMETER SPACE DEFINITION =====================
 def define_params(trial: optuna.Trial, defaults: dict) -> dict:
-    """Optunaのトライアルからハイパーパラメータを生成する (9個に厳選)"""
+    """Optunaのトライアルからハイパーパラメータを生成する (Top 11)"""
     params = {}
 
-    # === 9 Parameters (Focused Search Space) ===
+    def suggest_float_near(name, diff=0.2, min_val=0.0, max_val=2.0):
+        val = defaults.get(name, 0.5)
+        low = max(min_val, val - diff)
+        high = min(max_val, val + diff)
+        return trial.suggest_float(name, low, high)
+    
+    def suggest_log_near(name):
+        val = defaults.get(name, 1e-5)
+        low = val * 0.1
+        high = val * 10
+        return trial.suggest_float(name, low, high, log=True)
 
-    # 1. Strategy & Search
-    params["ucb_c"] = trial.suggest_float("ucb_c", 0.5, 3.0)
-    params["rollout_depth"] = trial.suggest_int("rollout_depth", 3, 20)
-    params["leader_mult"] = trial.suggest_float("leader_mult", 0.8, 1.8)
+    # === Top 11 Parameters (from Importance Analysis) ===
+    
+    # 1. rollout_depth (Importance: 0.10)
+    rd = defaults.get("rollout_depth", 6)
+    params["rollout_depth"] = trial.suggest_int("rollout_depth", max(1, rd - 2), min(20, rd + 2))
 
-    # 2. Evaluation Function Coefficients (Log scale)
-    low_e = 1e-6
-    params["eval_expand"] = trial.suggest_float("eval_expand", low_e, 1e-3, log=True)
-    params["eval_level"]  = trial.suggest_float("eval_level",  low_e, 1e-3, log=True)
-    params["eval_reach"]  = trial.suggest_float("eval_reach",  1e-5,  1e-2, log=True)
-    params["eval_attack"] = trial.suggest_float("eval_attack", low_e, 1e-2, log=True)
+    # 2. wb_mid (Importance: 0.10)
+    params["wb_mid"] = suggest_float_near("wb_mid", 0.3)
 
-    # 3. Input Adaptive Parameters
-    params["u_wb_boost"]     = trial.suggest_float("u_wb_boost", 0.0, 1.0)
-    params["u_wd_penalty"]   = trial.suggest_float("u_wd_penalty", 0.0, 1.0)
+    # 3. wc_late (Importance: 0.07)
+    params["wc_late"] = suggest_float_near("wc_late", 0.3)
+
+    # 4. eval_level (Importance: 0.07)
+    params["eval_level"] = suggest_log_near("eval_level")
+
+    # 5. wd_early (Importance: 0.07)
+    params["wd_early"] = suggest_float_near("wd_early", 0.3)
+
+    # 6. eval_attack (Importance: 0.06)
+    params["eval_attack"] = suggest_log_near("eval_attack")
+
+    # 7. u_wb_boost (Importance: 0.06)
+    params["u_wb_boost"] = suggest_float_near("u_wb_boost", 0.2)
+
+    # 8. wd_mid (Importance: 0.05)
+    params["wd_mid"] = suggest_float_near("wd_mid", 0.3)
+
+    # 9. wa_late (Importance: 0.04)
+    params["wa_late"] = suggest_float_near("wa_late", 0.3)
+
+    # 10. wb_late (Importance: 0.04)
+    params["wb_late"] = suggest_float_near("wb_late", 0.3)
+
+    # 11. wc_early (Importance: 0.04)
+    params["wc_early"] = suggest_float_near("wc_early", 0.3)
 
     return params
 
@@ -356,9 +386,10 @@ def main():
 
         # Enqueue current parameters as the first trial!
         tuned_param_names = [
-            "ucb_c", "rollout_depth", "leader_mult",
-            "eval_expand", "eval_level", "eval_reach", "eval_attack",
-            "u_wb_boost", "u_wd_penalty"
+            "rollout_depth",
+            "wb_mid", "wc_late", "eval_level", "wd_early", 
+            "eval_attack", "u_wb_boost", "wd_mid", 
+            "wa_late", "wb_late", "wc_early"
         ]
         
         initial_params = {}

@@ -1,6 +1,3 @@
-#pragma GCC optimize("O3,unroll-loops")
-#pragma GCC target("avx2,bmi,bmi2,popcnt")
-
 #include <iostream>
 #include <vector>
 #include <algorithm>
@@ -13,79 +10,42 @@ using namespace std;
 // ===================== GLOBALS =====================
 int N, M, T, U;
 int V[100]; // 1D array for value map
-double invT; // Inverted T for faster division
 
-// XorShift Random Number Generator
-struct XorShift {
-    using result_type = uint32_t;
-    uint32_t x = 123456789;
-    uint32_t y = 362436069;
-    uint32_t z = 521288629;
-    uint32_t w = 88675123;
-    
-    XorShift(uint32_t seed = 0) {
-        set_seed(seed);
-    }
-    
-    void set_seed(uint32_t seed) {
-        x = 123456789; y = 362436069; z = 521288629; w = 88675123;
-        x ^= seed;
-        y ^= (x << 13);
-        z ^= (y >> 17);
-        w ^= (z << 5);
-    }
-
-    static constexpr result_type min() { return 0; }
-    static constexpr result_type max() { return 0xFFFFFFFF; }
-    
-    inline result_type operator()() {
-        uint32_t t = x ^ (x << 11);
-        x = y; y = z; z = w;
-        return w = (w ^ (w >> 19)) ^ (t ^ (t >> 8));
-    }
-    
-    inline double nextDouble() { // [0, 1]
-        return (double)operator()() / 4294967295.0;
-    }
-
-    void seed(uint32_t s) { set_seed(s); }
-};
-
-XorShift rng;
+mt19937 rng(chrono::steady_clock::now().time_since_epoch().count());
 auto programStart = chrono::steady_clock::now();
 
 double elapsedMs() {
     return chrono::duration_cast<chrono::microseconds>(
-        chrono::steady_clock::now() - programStart).count() * 0.001;
+        chrono::steady_clock::now() - programStart).count() / 1000.0;
 }
 
 // ===================== TUNABLE HYPERPARAMETERS =====================
 struct HyperParams {
-    double phase1 = 0.27159946;
-    double phase2 = 0.70847988;
+    double phase1 = 0.20818362;
+    double phase2 = 0.68789216;
 
-    double wa_early = 0.23526016, wb_early = 0.36359119, wc_early = 0.46131418, wd_early = 0.49415821;
-    double wa_mid   = 0.75300129, wb_mid   = 0.72386218, wc_mid   = 0.55583898, wd_mid   = 0.21382323;
-    double wa_late  = 0.61319270, wb_late  = 0.78662693, wc_late  = 0.76681554, wd_late  = 0.63228284;
+    double wa_early = 0.85139762, wb_early = 0.21523535, wc_early = 0.93231604, wd_early = 0.29557141;
+    double wa_mid   = 0.30730916, wb_mid   = 0.90398914, wc_mid   = 0.51672106, wd_mid   = 0.33848466;
+    double wa_late  = 0.10187044, wb_late  = 1.14537644, wc_late  = 0.95442664, wd_late  = 0.43595538;
 
-    double leader_mult = 1.30321790;
-    double ucb_c = 0.68105000;
+    double leader_mult = 1.21876323;
+    double ucb_c = 0.75114139;
 
-    double eval_expand = 0.00000069;
-    double eval_level  = 0.00000490;
-    double eval_reach  = 0.00000390;
-    double eval_attack = 0.00000016;
+    double eval_expand = 0.00000329;
+    double eval_level  = 0.00000339;
+    double eval_reach  = 0.00001442;
+    double eval_attack = 0.00000371;
 
-    int rollout_depth = 6;
+    int rollout_depth = 4;
 
-    int num_particles = 464;
-    double pf_noise_w = 0.01800440;
-    double pf_noise_eps = 0.00046352;
+    int num_particles = 373;
+    double pf_noise_w = 0.01706855;
+    double pf_noise_eps = 0.00119343;
 
-    double u_wb_boost = 0.75473319;
-    double u_wd_penalty = 0.30301423;
+    double u_wb_boost = 0.75843313;
+    double u_wd_penalty = 0.48563285;
 
-    double m_leader_scale = 0.21663018;
+    double m_leader_scale = 0.24240965;
 } HP;
 
 void adaptParams() {
@@ -383,8 +343,7 @@ void updateParticles(const State& pre, int p, int obsX, int obsY) {
     }
 
     if (sumW < 1e-30) { initParticlesFor(p); return; }
-    double invSumW = 1.0 / sumW;
-    for (int k = 0; k < NP; k++) pweights[p][k] *= invSumW;
+    for (int k = 0; k < NP; k++) pweights[p][k] /= sumW;
 
     // Systematic resampling
     static Particle newP[500];
@@ -392,12 +351,11 @@ void updateParticles(const State& pre, int p, int obsX, int obsY) {
     cumW[0] = pweights[p][0];
     for (int k = 1; k < NP; k++) cumW[k] = cumW[k-1] + pweights[p][k];
 
-    double invNP = 1.0 / NP;
-    uniform_real_distribution<double> uni(0.0, invNP);
+    uniform_real_distribution<double> uni(0.0, 1.0 / NP);
     double u = uni(rng);
     int idx = 0;
     for (int k = 0; k < NP; k++) {
-        double target = u + (double)k * invNP;
+        double target = u + (double)k / NP;
         while (idx < NP - 1 && cumW[idx] < target) idx++;
         newP[k] = particles[p][idx];
     }
@@ -412,7 +370,7 @@ void updateParticles(const State& pre, int p, int obsX, int obsY) {
     }
 
     particles[p].assign(newP, newP + NP);
-    pweights[p].assign(NP, invNP);
+    pweights[p].assign(NP, 1.0 / NP);
 
     estimated[p] = {0, 0, 0, 0, 0};
     for (int k = 0; k < NP; k++) {
@@ -420,18 +378,19 @@ void updateParticles(const State& pre, int p, int obsX, int obsY) {
         estimated[p].wc += newP[k].wc; estimated[p].wd += newP[k].wd;
         estimated[p].eps += newP[k].eps;
     }
-    estimated[p].wa *= invNP; estimated[p].wb *= invNP;
-    estimated[p].wc *= invNP; estimated[p].wd *= invNP;
-    estimated[p].eps *= invNP;
+    estimated[p].wa /= NP; estimated[p].wb /= NP;
+    estimated[p].wc /= NP; estimated[p].wd /= NP;
+    estimated[p].eps /= NP;
 }
 
 // ===================== AI MOVE GENERATION =====================
-int genAIMove(const State& s, int p, const Particle& param, XorShift& lr) {
+int genAIMove(const State& s, int p, const Particle& param, mt19937& lr) {
     MoveList ml;
     getMovable(s, p, ml);
     if (ml.cnt == 0) return s.p_pos[p];
 
-    if (lr.nextDouble() < param.eps) return ml.idx[lr() % ml.cnt];
+    uniform_real_distribution<double> uni(0.0, 1.0);
+    if (uni(lr) < param.eps) return ml.idx[lr() % ml.cnt];
 
     double bestVal = -1e18;
     int bestIdx[200], bestCnt = 0;
@@ -475,7 +434,7 @@ double evaluate(const State& s, int currentTurn) {
         if (i < 90)      checkNeighbor(i + 10);
     });
 
-    double remain = (double)(T - currentTurn) * invT;
+    double remain = (double)(T - currentTurn) / T;
     return log2(1.0 + ratio)
            + HP.eval_expand * expandPot * remain
            + HP.eval_level * levelPot * remain
@@ -484,12 +443,12 @@ double evaluate(const State& s, int currentTurn) {
 }
 
 // ===================== PLAYER 0 GREEDY (rollout policy) =====================
-int greedyMove0(const State& s, int turn, XorShift& lr) {
+int greedyMove0(const State& s, int turn, mt19937& lr) {
     MoveList ml;
     getMovable(s, 0, ml);
     if (ml.cnt == 0) return s.p_pos[0];
 
-    double phase = (double)turn * invT;
+    double phase = (double)turn / T;
     double wa0, wb0, wc0, wd0;
     if (phase < HP.phase1) {
         wa0 = HP.wa_early; wb0 = HP.wb_early; wc0 = HP.wc_early; wd0 = HP.wd_early;
@@ -523,34 +482,13 @@ int greedyMove0(const State& s, int turn, XorShift& lr) {
 }
 
 // ===================== ROLLOUT =====================
-double rollout(State s, int startTurn, XorShift& lr) {
-    int depth = HP.rollout_depth;
-
-    // Adaptive Depth for small M (2-3 players) where depth is large
-    if (HP.rollout_depth > 10) {
-        double progress = (double)startTurn * invT;
-        if (progress > 0.6) {
-             // Linearly decay depth from 100% to 50%
-            double decay = 1.0 - (progress - 0.6); 
-            depth = max(6, (int)(HP.rollout_depth * decay));
-        }
-    }
-
-    // ★追加: ロールアウト開始前にサンプリング
-    Particle sampled[10];
-    for (int p = 1; p < M; p++) {
-        // int k = uniform_int_distribution<int>(0, HP.num_particles - 1)(lr);
-        int k = lr() % HP.num_particles; // 高速な代替
-        sampled[p] = particles[p][k];
-    }
-
-    int endTurn = min(T, startTurn + depth - 1);
+double rollout(State s, int startTurn, mt19937& lr) {
+    int endTurn = min(T, startTurn + HP.rollout_depth - 1);
     int moves[8];
     for (int t = startTurn; t <= endTurn; t++) {
         moves[0] = greedyMove0(s, t, lr);
         for (int p = 1; p < M; p++) {
-            // ★変更: estimated[p] → sampled[p]
-            moves[p] = genAIMove(s, p, sampled[p], lr);
+            moves[p] = genAIMove(s, p, estimated[p], lr);
         }
         simulateTurn(s, moves);
     }
@@ -573,9 +511,10 @@ pair<int,int> selectMove(const State& rootState, int currentTurn) {
         loops++;
         if ((loops & 127) == 0) {
             double now = elapsedMs();
-            if (now > 1995) break;
-            double budgetMs = (1995 - now) / (T - currentTurn + 1);
-            if (now - elapsed > budgetMs) break;
+            if (now - elapsed > 30) break;
+            if (now > 1980) break;
+            double budgetMs = (1980 - now) / (T - currentTurn + 1);
+            if (loops * 0.005 > budgetMs) break;
         }
 
         int bestIdx = -1;
@@ -614,72 +553,14 @@ pair<int,int> selectMove(const State& rootState, int currentTurn) {
     return {idx/10, idx%10};
 }
 
-// ===================== PARAMETER LOADING =====================
-void loadParams(const string& filename) {
-    FILE* fp = fopen(filename.c_str(), "r");
-    if (!fp) {
-        cerr << "Failed to open parameter file: " << filename << endl;
-        return;
-    }
-    char key[128];
-    double val;
-    while (fscanf(fp, "%s %lf", key, &val) == 2) {
-        string k(key);
-        if (k == "phase1") HP.phase1 = val;
-        else if (k == "phase2") HP.phase2 = val;
-        else if (k == "wa_early") HP.wa_early = val;
-        else if (k == "wb_early") HP.wb_early = val;
-        else if (k == "wc_early") HP.wc_early = val;
-        else if (k == "wd_early") HP.wd_early = val;
-        else if (k == "wa_mid") HP.wa_mid = val;
-        else if (k == "wb_mid") HP.wb_mid = val;
-        else if (k == "wc_mid") HP.wc_mid = val;
-        else if (k == "wd_mid") HP.wd_mid = val;
-        else if (k == "wa_late") HP.wa_late = val;
-        else if (k == "wb_late") HP.wb_late = val;
-        else if (k == "wc_late") HP.wc_late = val;
-        else if (k == "wd_late") HP.wd_late = val;
-        else if (k == "leader_mult") HP.leader_mult = val;
-        else if (k == "ucb_c") HP.ucb_c = val;
-        else if (k == "eval_expand") HP.eval_expand = val;
-        else if (k == "eval_level") HP.eval_level = val;
-        else if (k == "eval_reach") HP.eval_reach = val;
-        else if (k == "eval_attack") HP.eval_attack = val;
-        else if (k == "rollout_depth") HP.rollout_depth = (int)val;
-        else if (k == "num_particles") HP.num_particles = (int)val;
-        else if (k == "pf_noise_w") HP.pf_noise_w = val;
-        else if (k == "pf_noise_eps") HP.pf_noise_eps = val;
-        else if (k == "u_wb_boost") HP.u_wb_boost = val;
-        else if (k == "u_wd_penalty") HP.u_wd_penalty = val;
-        else if (k == "m_leader_scale") HP.m_leader_scale = val;
-    }
-    fclose(fp);
-    cerr << "Loaded parameters from " << filename << endl;
-}
-
 // ===================== MAIN =====================
-int main(int argc, char* argv[]) {
+int main() {
     ios_base::sync_with_stdio(false);
     cin.tie(nullptr);
-
-    if (argc > 1) {
-        loadParams(argv[1]);
-    }
-    
-    // Fixed seed support
-    unsigned int seed = 12345; // Default fixed seed
-    if (argc > 2) {
-        seed = (unsigned int)stoul(argv[2]);
-    } else {
-        // Fallback to random seed if no 2nd argument provided (optional)
-        // seed = chrono::steady_clock::now().time_since_epoch().count(); 
-    }
-    rng.seed(seed);
 
     initBitboards();
 
     cin >> N >> M >> T >> U;
-    invT = 1.0 / T;
 
     adaptParams();
 

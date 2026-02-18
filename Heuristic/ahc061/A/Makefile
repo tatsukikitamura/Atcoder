@@ -13,7 +13,7 @@
 # =============================================================================
 
 CXX = g++
-CXXFLAGS = -std=c++23 -O2 -Wall -static
+CXXFLAGS = -std=c++23 -O2 -Wall -static -DLOCAL
 
 # OS detection for Windows compatibility
 ifeq ($(OS),Windows_NT)
