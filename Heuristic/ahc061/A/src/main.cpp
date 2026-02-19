@@ -75,6 +75,7 @@ struct HyperParams {
     double eval_level  = 0.00000490;
     double eval_reach  = 0.00000390;
     double eval_attack = 0.00000016;
+    double eval_trap   = 0.01;
 
     int rollout_depth = 6;
 
@@ -86,29 +87,29 @@ struct HyperParams {
     double u_wd_penalty = 0.30301423;
 
     double m_leader_scale = 0.21663018;
-} HP;
+} HP[6]; // U=1 to 5 (index 0 unused)
 
 void adaptParams() {
     double uFactor = max(0.0, (U - 2.0) / 3.0);
-    HP.wb_mid  += HP.u_wb_boost * uFactor;
-    HP.wb_late += HP.u_wb_boost * uFactor;
-    HP.wd_mid  -= HP.u_wd_penalty * uFactor;
-    HP.wd_late -= HP.u_wd_penalty * uFactor;
-    HP.wd_mid  = max(0.01, HP.wd_mid);
-    HP.wd_late = max(0.01, HP.wd_late);
+    HP[U].wb_mid  += HP[U].u_wb_boost * uFactor;
+    HP[U].wb_late += HP[U].u_wb_boost * uFactor;
+    HP[U].wd_mid  -= HP[U].u_wd_penalty * uFactor;
+    HP[U].wd_late -= HP[U].u_wd_penalty * uFactor;
+    HP[U].wd_mid  = max(0.01, HP[U].wd_mid);
+    HP[U].wd_late = max(0.01, HP[U].wd_late);
 
-    HP.leader_mult += HP.m_leader_scale * max(0, M - 2);
+    HP[U].leader_mult += HP[U].m_leader_scale * max(0, M - 2);
 
     if (M >= 6) {
-        HP.rollout_depth = min(HP.rollout_depth, 10);
-        HP.num_particles = min(HP.num_particles, 120);
+        HP[U].rollout_depth = min(HP[U].rollout_depth, 10);
+        HP[U].num_particles = min(HP[U].num_particles, 120);
     } else if (M <= 3) {
-        HP.rollout_depth = min(HP.rollout_depth + 8, 30);
+        HP[U].rollout_depth = min(HP[U].rollout_depth + 8, 30);
     }
 
     if (U == 1) {
-        HP.wb_early = 0.0; HP.wb_mid = 0.0; HP.wb_late = 0.0;
-        HP.phase1 = 0.5; HP.phase2 = 0.5;
+        HP[U].wb_early = 0.0; HP[U].wb_mid = 0.0; HP[U].wb_late = 0.0;
+        HP[U].phase1 = 0.5; HP[U].phase2 = 0.5;
     }
 }
 
@@ -315,9 +316,9 @@ vector<Particle> estimated;
 
 void initParticlesFor(int p) {
     uniform_real_distribution<double> dw(0.3, 1.0), de(0.1, 0.5);
-    particles[p].resize(HP.num_particles);
-    pweights[p].assign(HP.num_particles, 1.0 / HP.num_particles);
-    for (int k = 0; k < HP.num_particles; k++)
+    particles[p].resize(HP[U].num_particles);
+    pweights[p].assign(HP[U].num_particles, 1.0 / HP[U].num_particles);
+    for (int k = 0; k < HP[U].num_particles; k++)
         particles[p][k] = {dw(rng), dw(rng), dw(rng), dw(rng), de(rng)};
     estimated[p] = {0.65, 0.65, 0.65, 0.65, 0.3};
 }
@@ -369,7 +370,7 @@ double computeLikelihoodCached(const State& pre, int p, int obsIdx,
 // ★改善1: getMovableをループ外で1回だけ呼ぶ
 void updateParticles(const State& pre, int p, int obsX, int obsY) {
     int obsIdx = obsX * 10 + obsY;
-    int NP = HP.num_particles;
+    int NP = HP[U].num_particles;
 
     // ★改善1: 1回だけ計算してキャッシュ
     MoveList ml;
@@ -402,7 +403,7 @@ void updateParticles(const State& pre, int p, int obsX, int obsY) {
         newP[k] = particles[p][idx];
     }
 
-    normal_distribution<double> nw(0, HP.pf_noise_w), ne(0, HP.pf_noise_eps);
+    normal_distribution<double> nw(0, HP[U].pf_noise_w), ne(0, HP[U].pf_noise_eps);
     for (int k = 0; k < NP; k++) {
         newP[k].wa  = clamp(newP[k].wa  + nw(rng), 0.3, 1.0);
         newP[k].wb  = clamp(newP[k].wb  + nw(rng), 0.3, 1.0);
@@ -476,11 +477,32 @@ double evaluate(const State& s, int currentTurn) {
     });
 
     double remain = (double)(T - currentTurn) * invT;
-    return log2(1.0 + ratio)
-           + HP.eval_expand * expandPot * remain
-           + HP.eval_level * levelPot * remain
-           + HP.eval_reach * myReach
-           + HP.eval_attack * attackPot * remain;
+    double baseScore = log2(1.0 + ratio)
+           + HP[U].eval_expand * expandPot * remain
+           + HP[U].eval_level * levelPot * remain
+           + HP[U].eval_reach * myReach
+           + HP[U].eval_attack * attackPot * remain;
+
+    // ★追加: M=2のとき、相手の移動可能領域（拡張余地）を減らすと高評価
+    if (M <= 3) {
+        // 相手(p=1)の到達可能マスク
+        Bitboard oppReach = getReachableMask(s, 1);
+        Bitboard oppExpand = 0;
+        oppExpand |= ((oppReach & MASK_NOT_COL_0) >> 1);
+        oppExpand |= ((oppReach & MASK_NOT_COL_9) << 1);
+        oppExpand |= (oppReach >> 10);
+        oppExpand |= (oppReach << 10);
+        oppExpand &= ~oppReach;
+        oppExpand &= MASK_ALL;
+        
+        // 相手の拡張可能数
+        int oppMobility = popcount128(oppExpand);
+        // Mobilityを減らす方向へ
+        // remainを掛けるかどうかは議論があるが、eval_expandと対称性を持たせるなら掛ける
+        return baseScore - HP[U].eval_trap * oppMobility * remain;
+    }
+
+    return baseScore;
 }
 
 // ===================== PLAYER 0 GREEDY (rollout policy) =====================
@@ -491,12 +513,12 @@ int greedyMove0(const State& s, int turn, XorShift& lr) {
 
     double phase = (double)turn * invT;
     double wa0, wb0, wc0, wd0;
-    if (phase < HP.phase1) {
-        wa0 = HP.wa_early; wb0 = HP.wb_early; wc0 = HP.wc_early; wd0 = HP.wd_early;
-    } else if (phase < HP.phase2) {
-        wa0 = HP.wa_mid; wb0 = HP.wb_mid; wc0 = HP.wc_mid; wd0 = HP.wd_mid;
+    if (phase < HP[U].phase1) {
+        wa0 = HP[U].wa_early; wb0 = HP[U].wb_early; wc0 = HP[U].wc_early; wd0 = HP[U].wd_early;
+    } else if (phase < HP[U].phase2) {
+        wa0 = HP[U].wa_mid; wb0 = HP[U].wb_mid; wc0 = HP[U].wc_mid; wd0 = HP[U].wd_mid;
     } else {
-        wa0 = HP.wa_late; wb0 = HP.wb_late; wc0 = HP.wc_late; wd0 = HP.wd_late;
+        wa0 = HP[U].wa_late; wb0 = HP[U].wb_late; wc0 = HP[U].wc_late; wd0 = HP[U].wd_late;
     }
 
     // ★改善2: score()がO(1)
@@ -512,7 +534,7 @@ int greedyMove0(const State& s, int turn, XorShift& lr) {
         if (o == -1) val = V[idx] * wa0;
         else if (o == 0) val = (s.level[idx] < U) ? V[idx] * wb0 : -0.01;
         else {
-            double mult = (o == leader) ? HP.leader_mult : 1.0;
+            double mult = (o == leader) ? HP[U].leader_mult : 1.0;
             val = ((s.level[idx] == 1) ? V[idx] * wc0 : V[idx] * wd0) * mult;
         }
         if (val > bestVal + 1e-12) { bestVal = val; bestCnt = 0; bestIdx[bestCnt++] = k; }
@@ -524,15 +546,15 @@ int greedyMove0(const State& s, int turn, XorShift& lr) {
 
 // ===================== ROLLOUT =====================
 double rollout(State s, int startTurn, XorShift& lr) {
-    int depth = HP.rollout_depth;
+    int depth = HP[U].rollout_depth;
 
     // Adaptive Depth for small M (2-3 players) where depth is large
-    if (HP.rollout_depth > 10) {
+    if (HP[U].rollout_depth > 10) {
         double progress = (double)startTurn * invT;
         if (progress > 0.6) {
              // Linearly decay depth from 100% to 50%
             double decay = 1.0 - (progress - 0.6); 
-            depth = max(6, (int)(HP.rollout_depth * decay));
+            depth = max(6, (int)(HP[U].rollout_depth * decay));
         }
     }
 
@@ -540,7 +562,7 @@ double rollout(State s, int startTurn, XorShift& lr) {
     Particle sampled[10];
     for (int p = 1; p < M; p++) {
         // int k = uniform_int_distribution<int>(0, HP.num_particles - 1)(lr);
-        int k = lr() % HP.num_particles; // 高速な代替
+        int k = lr() % HP[U].num_particles; // 高速な代替
         sampled[p] = particles[p][k];
     }
 
@@ -585,7 +607,7 @@ pair<int,int> selectMove(const State& rootState, int currentTurn) {
         for(int k=0; k<ml.cnt; k++) {
             if (visits[k] == 0) { bestIdx = k; break; }
             double avg = scores[k] / visits[k];
-            double ucb = avg + HP.ucb_c * sqrt(log(total) / visits[k]);
+            double ucb = avg + HP[U].ucb_c * sqrt(log(total) / visits[k]);
             if (ucb > bestUcb) { bestUcb = ucb; bestIdx = k; }
         }
         if (bestIdx == -1) bestIdx = rng() % ml.cnt;
@@ -621,40 +643,64 @@ void loadParams(const string& filename) {
         cerr << "Failed to open parameter file: " << filename << endl;
         return;
     }
-    char key[128];
+    char key[256];
     double val;
     while (fscanf(fp, "%s %lf", key, &val) == 2) {
         string k(key);
-        if (k == "phase1") HP.phase1 = val;
-        else if (k == "phase2") HP.phase2 = val;
-        else if (k == "wa_early") HP.wa_early = val;
-        else if (k == "wb_early") HP.wb_early = val;
-        else if (k == "wc_early") HP.wc_early = val;
-        else if (k == "wd_early") HP.wd_early = val;
-        else if (k == "wa_mid") HP.wa_mid = val;
-        else if (k == "wb_mid") HP.wb_mid = val;
-        else if (k == "wc_mid") HP.wc_mid = val;
-        else if (k == "wd_mid") HP.wd_mid = val;
-        else if (k == "wa_late") HP.wa_late = val;
-        else if (k == "wb_late") HP.wb_late = val;
-        else if (k == "wc_late") HP.wc_late = val;
-        else if (k == "wd_late") HP.wd_late = val;
-        else if (k == "leader_mult") HP.leader_mult = val;
-        else if (k == "ucb_c") HP.ucb_c = val;
-        else if (k == "eval_expand") HP.eval_expand = val;
-        else if (k == "eval_level") HP.eval_level = val;
-        else if (k == "eval_reach") HP.eval_reach = val;
-        else if (k == "eval_attack") HP.eval_attack = val;
-        else if (k == "rollout_depth") HP.rollout_depth = (int)val;
-        else if (k == "num_particles") HP.num_particles = (int)val;
-        else if (k == "pf_noise_w") HP.pf_noise_w = val;
-        else if (k == "pf_noise_eps") HP.pf_noise_eps = val;
-        else if (k == "u_wb_boost") HP.u_wb_boost = val;
-        else if (k == "u_wd_penalty") HP.u_wd_penalty = val;
-        else if (k == "m_leader_scale") HP.m_leader_scale = val;
+        // Check for "uX_" prefix
+        int target_u = -1; // -1 means all
+        string name = k;
+
+        if (k.size() > 3 && k[0] == 'u' && isdigit(k[1]) && k[2] == '_') {
+            target_u = k[1] - '0';
+            name = k.substr(3);
+        }
+
+        // Apply to specific U or all U
+        int start_u = (target_u != -1) ? target_u : 1;
+        int end_u   = (target_u != -1) ? target_u : 5;
+
+        for (int u = start_u; u <= end_u; u++) {
+            if (u < 1 || u > 5) continue;
+
+            if (name == "phase1") HP[u].phase1 = val;
+            else if (name == "phase2") HP[u].phase2 = val;
+
+            else if (name == "wa_early") HP[u].wa_early = val;
+            else if (name == "wb_early") HP[u].wb_early = val;
+            else if (name == "wc_early") HP[u].wc_early = val;
+            else if (name == "wd_early") HP[u].wd_early = val;
+            
+            else if (name == "wa_mid") HP[u].wa_mid = val;
+            else if (name == "wb_mid") HP[u].wb_mid = val;
+            else if (name == "wc_mid") HP[u].wc_mid = val;
+            else if (name == "wd_mid") HP[u].wd_mid = val;
+
+            else if (name == "wa_late") HP[u].wa_late = val;
+            else if (name == "wb_late") HP[u].wb_late = val;
+            else if (name == "wc_late") HP[u].wc_late = val;
+            else if (name == "wd_late") HP[u].wd_late = val;
+
+            else if (name == "leader_mult") HP[u].leader_mult = val;
+            else if (name == "ucb_c") HP[u].ucb_c = val;
+
+            else if (name == "eval_expand") HP[u].eval_expand = val;
+            else if (name == "eval_level") HP[u].eval_level = val;
+            else if (name == "eval_reach") HP[u].eval_reach = val;
+            else if (name == "eval_attack") HP[u].eval_attack = val;
+            else if (name == "eval_trap") HP[u].eval_trap = val;
+
+            else if (name == "rollout_depth") HP[u].rollout_depth = (int)val;
+            else if (name == "num_particles") HP[u].num_particles = (int)val;
+            else if (name == "pf_noise_w") HP[u].pf_noise_w = val;
+            else if (name == "pf_noise_eps") HP[u].pf_noise_eps = val;
+
+            else if (name == "u_wb_boost") HP[u].u_wb_boost = val;
+            else if (name == "u_wd_penalty") HP[u].u_wd_penalty = val;
+            else if (name == "m_leader_scale") HP[u].m_leader_scale = val;
+        }
     }
     fclose(fp);
-    cerr << "Loaded parameters from " << filename << endl;
 }
 
 // ===================== MAIN =====================
