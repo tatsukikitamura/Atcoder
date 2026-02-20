@@ -34,7 +34,7 @@ TESTER_BIN = str(PROJECT_ROOT / "tools" / "target" / "release" / "tester.exe")
 TESTCASE_DIR = str(PROJECT_ROOT / "tools" / "in")
 COMPILE_CMD = "g++ -std=c++23 -O2 -Wall -static -o build/main.exe src/main.cpp"
 DB_PATH = f"sqlite:///{PROJECT_ROOT / 'optuna_ahc.db'}"
-STUDY_NAME = "ahc_bitboard"
+STUDY_NAME = "ahc_global_tuning"
 TIMEOUT_SEC = 10  # 1テストケースあたりのタイムアウト
 
 
@@ -50,18 +50,36 @@ def get_default_params_from_cpp(cpp_path: str) -> dict:
         content = f.read()
 
     # struct HyperParams { ... } ブロックを探す (簡易的な検索)
-    # double phase1 = 0.20818362;
-    # int rollout_depth = 3;
     
-    # 浮動小数点数
-    float_matches = re.findall(r'double\s+(\w+)\s*=\s*([\d.]+);', content)
-    for name, val in float_matches:
-        defaults[name] = float(val)
-        
-    # 整数
-    int_matches = re.findall(r'int\s+(\w+)\s*=\s*(\d+);', content)
-    for name, val in int_matches:
-        defaults[name] = int(val)
+    # Extract variable declarations
+    # Matches: type var1 = val1, var2 = val2;
+    # We look for lines starting with double or int inside the struct (or just generally in the file for simplicity as names are unique enough)
+    
+    # Remove comments to avoid parsing issues
+    content = re.sub(r'//.*', '', content)
+    
+    # Find all declarations: type name = val, name2 = val2;
+    # We'll just look for assignments of the form "name = value" preceded by type or comma
+    
+    # Strategy: Find all "double ...;" or "int ...;" lines
+    declarations = re.findall(r'(?:double|int)\s+([^;]+);', content)
+    
+    for decl_line in declarations:
+        # Split by comma to handle multiple declarations
+        parts = decl_line.split(',')
+        for part in parts:
+            # Match "name = value" with support for scientific notation (e.g., 1.2e-3)
+            m = re.search(r'(\w+)\s*=\s*([+\-]?\d*\.?\d+(?:[eE][+\-]?\d+)?)', part)
+            if m:
+                name = m.group(1)
+                val = float(m.group(2))
+                defaults[name] = val
+                
+    # Cast known ints
+    int_keys = ["rollout_depth", "rollout_depth_max", "rollout_depth_min", "num_particles"]
+    for k in int_keys:
+        if k in defaults:
+            defaults[k] = int(defaults[k])
         
     print(f"[INFO] main.cpp から {len(defaults)} 個のデフォルト値を読み込みました")
     return defaults
@@ -72,52 +90,60 @@ def define_params(trial: optuna.Trial, defaults: dict) -> dict:
     """Optunaのトライアルからハイパーパラメータを生成する (Top 11)"""
     params = {}
 
-    def suggest_float_near(name, diff=0.3, min_val=0.0, max_val=2.0):
+    def suggest_float_near(name, diff=0.4, min_val=0.0, max_val=2.0):
         val = defaults.get(name, 0.5)
         low = max(min_val, val - diff)
         high = min(max_val, val + diff)
+        if high <= low: high = low + 1e-6
         return trial.suggest_float(name, low, high)
     
     def suggest_log_near(name):
         val = defaults.get(name, 1e-5)
-        low = val * 0.1
-        high = val * 10
+        if val <= 1e-9: val = 1e-5
+        low = val * 0.01
+        high = val * 100.0
         return trial.suggest_float(name, low, high, log=True)
 
-    # === Top 11 Parameters (from Importance Analysis) ===
+    # === Top Parameters ===
     
-    # 1. rollout_depth (Importance: 0.10)
-    rd = defaults.get("rollout_depth", 6)
-    params["rollout_depth"] = trial.suggest_int("rollout_depth", max(1, rd - 2), min(20, rd + 2))
+    # 1. rollout_depth_max & min
+    
+    # User requested explicit ranges: max = 1~10, min = 1~6
+    params["rollout_depth_max"] = trial.suggest_int("rollout_depth_max", 1, 10)
+    params["rollout_depth_min"] = trial.suggest_int("rollout_depth_min", 1, 6)
+    
+    # Ensure min <= max
+    if params["rollout_depth_min"] > params["rollout_depth_max"]:
+        params["rollout_depth_min"] = params["rollout_depth_max"]
 
-    # 2. wb_mid (Importance: 0.10)
+    # 2. wb_mid
     params["wb_mid"] = suggest_float_near("wb_mid", 0.3)
 
-    # 3. wc_late (Importance: 0.07)
+    # 3. wc_late
     params["wc_late"] = suggest_float_near("wc_late", 0.3)
 
-    # 4. eval_level (Importance: 0.07)
+    # 4. eval_level
     params["eval_level"] = suggest_log_near("eval_level")
 
-    # 5. wd_early (Importance: 0.07)
+    # 5. wd_early
     params["wd_early"] = suggest_float_near("wd_early", 0.3)
 
-    # 6. eval_attack (Importance: 0.06)
+    # 6. eval_attack
     params["eval_attack"] = suggest_log_near("eval_attack")
 
-    # 7. u_wb_boost (Importance: 0.06)
+    # 7. u_wb_boost
     params["u_wb_boost"] = suggest_float_near("u_wb_boost", 0.2)
 
-    # 8. wd_mid (Importance: 0.05)
+    # 8. wd_mid
     params["wd_mid"] = suggest_float_near("wd_mid", 0.3)
 
-    # 9. wa_late (Importance: 0.04)
+    # 9. wa_late
     params["wa_late"] = suggest_float_near("wa_late", 0.3)
 
-    # 10. wb_late (Importance: 0.04)
+    # 10. wb_late
     params["wb_late"] = suggest_float_near("wb_late", 0.3)
 
-    # 11. wc_early (Importance: 0.04)
+    # 11. wc_early
     params["wc_early"] = suggest_float_near("wc_early", 0.3)
 
     # 12. eval_trap
@@ -127,25 +153,11 @@ def define_params(trial: optuna.Trial, defaults: dict) -> dict:
 
 
 # ===================== PARAMETER FILE I/O =====================
-def write_param_file(params: dict, filepath: str, target_u: int = 0):
-    """パラメータをファイルに書き出す. target_u > 0 の場合 u{target_u}_key 形式で書き出す"""
+def write_param_file(params: dict, filepath: str):
+    """パラメータをファイルに書き出す"""
     with open(filepath, "w") as f:
         for k, v in params.items():
-            if target_u > 0:
-                f.write(f"u{target_u}_{k} {v}\n")
-            else:
-                f.write(f"{k} {v}\n")
-
-
-def read_param_file(filepath: str) -> dict:
-    """configファイルからパラメータを読み込む"""
-    params = {}
-    with open(filepath) as f:
-        for line in f:
-            parts = line.strip().split()
-            if len(parts) == 2:
-                params[parts[0]] = float(parts[1])
-    return params
+            f.write(f"{k} {v}\n")
 
 
 # ===================== TEST CASE MANAGEMENT =====================
@@ -163,21 +175,6 @@ def get_testcases() -> list:
         sys.exit(1)
 
     return [str(c) for c in cases]
-
-def get_testcases_by_u(target_u: int) -> list:
-    """指定されたUのテストケースのみを返す"""
-    all_cases = get_testcases()
-    filtered = []
-    for tc in all_cases:
-        try:
-            with open(tc, "r") as f:
-                # First line: N M T U
-                line = f.readline().split()
-                if len(line) >= 4 and int(line[3]) == target_u:
-                    filtered.append(tc)
-        except:
-            pass
-    return filtered
 
 
 # ===================== SINGLE RUN =====================
@@ -233,11 +230,10 @@ def run_single(testcase_path: str, param_file: str) -> float:
 N_JOBS = 1
 MAX_CASES = 0
 CACHED_DEFAULTS = {}
-CURRENT_TESTCASES = [] # Currently active testcases for the objective function
+CURRENT_TESTCASES = [] 
 
 def run_all_cases(param_file: str) -> list:
     """全テストケースを実行してスコアリストを返す (並列対応)"""
-    # Use global CURRENT_TESTCASES if set, otherwise get all
     testcases = CURRENT_TESTCASES if CURRENT_TESTCASES else get_testcases()
     
     if MAX_CASES > 0:
@@ -256,29 +252,7 @@ def run_all_cases(param_file: str) -> list:
         return scores
 
 
-def categorize_testcases() -> dict:
-    """テストケースを (M, U) カテゴリに分類"""
-    testcases = CURRENT_TESTCASES if CURRENT_TESTCASES else get_testcases()
-    if MAX_CASES > 0:
-        testcases = testcases[:MAX_CASES]
-
-    categories = {}  # (m_cat, u_cat) -> [index]
-    for i, tc in enumerate(testcases):
-        with open(tc) as f:
-            first_line = f.readline().strip().split()
-            _n, m, _t, u = int(first_line[0]), int(first_line[1]), int(first_line[2]), int(first_line[3])
-        m_cat = "low" if m <= 3 else ("mid" if m <= 5 else "high")
-        u_cat = "low" if u <= 2 else ("mid" if u <= 3 else "high")
-        key = (m_cat, u_cat)
-        if key not in categories:
-            categories[key] = []
-        categories[key].append(i)
-    return categories
-
-
 # ===================== OBJECTIVE FUNCTION =====================
-# Global context for objective function
-CURRENT_TARGET_U = 0
 
 def objective_global(trial: optuna.Trial) -> float:
     """全テストケースの平均スコアを最大化"""
@@ -287,42 +261,12 @@ def objective_global(trial: optuna.Trial) -> float:
     param_file = tempfile.NamedTemporaryFile(
         mode="w", suffix=".cfg", delete=False, prefix="optuna_params_"
     )
-    # Use global CURRENT_TARGET_U to prefix parameters if needed
-    write_param_file(params, param_file.name, int(CURRENT_TARGET_U))
+    write_param_file(params, param_file.name)
     param_file.close()
 
     try:
         scores = run_all_cases(param_file.name)
         return sum(scores) / len(scores) if scores else 0.0
-    finally:
-        try:
-            os.unlink(param_file.name)
-        except:
-            pass
-
-
-def objective_stratified(trial: optuna.Trial) -> float:
-    """M/Uカテゴリ均等で平均スコアを最大化"""
-    params = define_params(trial, CACHED_DEFAULTS)
-
-    param_file = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".cfg", delete=False, prefix="optuna_params_"
-    )
-    # Use global CURRENT_TARGET_U to prefix parameters if needed
-    write_param_file(params, param_file.name, int(CURRENT_TARGET_U))
-    param_file.close()
-
-    try:
-        scores = run_all_cases(param_file.name)
-        cat_map = categorize_testcases()
-
-        cat_avgs = []
-        for key, indices in cat_map.items():
-            cat_scores = [scores[i] for i in indices]
-            if cat_scores:
-                cat_avgs.append(sum(cat_scores) / len(cat_scores))
-
-        return sum(cat_avgs) / len(cat_avgs) if cat_avgs else 0.0
     finally:
         try:
             os.unlink(param_file.name)
@@ -344,35 +288,31 @@ def main():
                         help="最良パラメータをcfgファイルに出力")
     parser.add_argument("--compile", action="store_true",
                         help="ソリューションをコンパイル")
-    parser.add_argument("--eval", type=str, default=None,
-                        help="指定cfgファイルで全テストケースを評価")
     parser.add_argument("--n_trials", type=int, default=100,
                         help="Optunaのトライアル数")
     parser.add_argument("--jobs", type=int, default=1,
                         help="並列実行数 (テストケース内の並列)")
-    parser.add_argument("--strategy", type=str, default="global",
-                        choices=["global", "stratified"],
-                        help="最適化戦略: global=全体平均, stratified=M/Uカテゴリ均等")
     parser.add_argument("--study_name", type=str, default=STUDY_NAME,
                         help="Optuna study名")
     parser.add_argument("--db", type=str, default=DB_PATH,
                         help="Optuna DBパス")
     parser.add_argument("--max_cases", type=int, default=0,
                         help="使用するテストケース数を制限 (0=全件)")
-    parser.add_argument("--target_u", type=int, default=0,
-                        help="特定のUのみチューニング (0=全て)")
+    # Deprecated / ignored
+    parser.add_argument("--target_u", type=int, default=0, help="Deprecated")
+    parser.add_argument("--strategy", type=str, default="global", help="Deprecated")
+
     args = parser.parse_args()
 
     print(f"[INFO] Project root: {PROJECT_ROOT}")
     print(f"[INFO] Solution:     {SOLUTION_BIN}")
-    print(f"[INFO] Tester:       {TESTER_BIN}")
-
+    
     # Set global config
-    global N_JOBS, MAX_CASES, CACHED_DEFAULTS, CURRENT_TESTCASES, CURRENT_TARGET_U
+    global N_JOBS, MAX_CASES, CACHED_DEFAULTS, CURRENT_TESTCASES
     N_JOBS = args.jobs
     MAX_CASES = args.max_cases
     
-    # Load defaults always
+    # Load defaults
     CACHED_DEFAULTS = get_default_params_from_cpp(MAIN_CPP)
 
     if args.compile:
@@ -392,156 +332,129 @@ def main():
             print(f"[ERROR] {TESTER_BIN} が見つかりません。cd tools && cargo build -r でビルドしてください")
             sys.exit(1)
 
-        # Iterate over U values
-        u_range = [args.target_u] if args.target_u > 0 else [1, 2, 3, 4, 5]
+        print(f"\n{'='*40}")
+        print(f" STARTING GLOBAL TUNING ")
+        print(f"{'='*40}")
 
-        for u_val in u_range:
-            CURRENT_TARGET_U = u_val # Set global context for objective function
-            print(f"\n{'='*40}")
-            print(f" STARTING TUNING FOR U={u_val} ")
-            print(f"{'='*40}")
+        # Optuna study作成
+        sampler = TPESampler(seed=42, n_startup_trials=20)
+        pruner = optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=3)
+        
+        study = optuna.create_study(
+            study_name=args.study_name,
+            storage=args.db,
+            direction="maximize",
+            sampler=sampler,
+            pruner=pruner,
+            load_if_exists=True
+        )
 
-            # Filter testcases for this U
-            CURRENT_TESTCASES = get_testcases_by_u(u_val)
-            print(f"[INFO] U={u_val} のテストケース数: {len(CURRENT_TESTCASES)}")
-            
-            if not CURRENT_TESTCASES:
-                print(f"[WARN] U={u_val} のテストケースが見つかりません。スキップします。")
-                continue
+        # Enqueue current parameters as the first trial
+        # We try to enqueue ALMOST ALL params that are keys in CACHED_DEFAULTS
+        # But we must match the keys used in define_params
+        
+        # NOTE: define_params uses specific keys. We need to match defaults to those keys.
+        # Most match exactly.
+        
+        initial_params = {}
+        # List of all keys we expect to tune (based on define_params)
+        expected_keys = [
+            "rollout_depth_max", "rollout_depth_min",
+            "wb_mid", "wc_late", "eval_level", "wd_early", "eval_attack",
+            "u_wb_boost", "wd_mid", "wa_late", "wb_late", "wc_early",
+            "eval_trap"
+        ]
+        
+        for k in expected_keys:
+            if k in CACHED_DEFAULTS:
+                initial_params[k] = CACHED_DEFAULTS[k]
+        
+        if len(study.trials) == 0 and initial_params:
+            print(f"[INFO] 現在のデフォルト値を初期トライアルとしてキューに追加します ({len(initial_params)} params)")
+            study.enqueue_trial(initial_params)
 
-            current_study_name = f"{args.study_name}_u{u_val}"
-
-            print(f"[INFO] トライアル数: {args.n_trials}")
-            print(f"[INFO] 最適化戦略: {args.strategy}")
-            print(f"[INFO] 並列数: {N_JOBS}")
-            print(f"[INFO] Study名: {current_study_name}")
-
-            # Optuna study作成
-            sampler = TPESampler(seed=42, n_startup_trials=20)
-            pruner = optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=3)
-            
-            study = optuna.create_study(
-                study_name=current_study_name,
-                storage=args.db,
-                direction="maximize",
-                sampler=sampler,
-                pruner=pruner,
-                load_if_exists=True
-            )
-
-            # Enqueue current parameters as the first trial!
-            tuned_param_names = [
-                "rollout_depth",
-                "wb_mid", "wc_late", "eval_level", "wd_early", 
-                "eval_attack", "u_wb_boost", "wd_mid", 
-                "wa_late", "wb_late", "wc_early", "eval_trap"
-            ]
-            
-            initial_params = {}
-            for name in tuned_param_names:
-                if name in CACHED_DEFAULTS:
-                    initial_params[name] = CACHED_DEFAULTS[name]
-            
-            # Only enqueue if the study is new (or empty) to avoid re-evaluating defaults every time
-            if len(study.trials) == 0 and initial_params:
-                print("[INFO] 現在のデフォルト値を初期トライアルとしてキューに追加します:")
-                study.enqueue_trial(initial_params)
-
-            # 目的関数の選択
-            obj_func = objective_stratified if args.strategy == "stratified" else objective_global
-
-            print(f"[INFO] 最適化開始...")
-            start_time = time.time()
-            study.optimize(obj_func, n_trials=args.n_trials, show_progress_bar=True)
-            elapsed = time.time() - start_time
-            
-            print(f"\n[OK] 最適化完了 ({elapsed:.1f}秒)")
-            print(f"[BEST] スコア: {study.best_value:.2f}")
-            print(f"[BEST] パラメータ:")
-            for k, v in study.best_params.items():
-                print(f"  {k}: {v}")
+        print(f"[INFO] 最適化開始...")
+        start_time = time.time()
+        study.optimize(objective_global, n_trials=args.n_trials, show_progress_bar=True)
+        elapsed = time.time() - start_time
+        
+        print(f"\n[OK] 最適化完了 ({elapsed:.1f}秒)")
+        print(f"[BEST] スコア: {study.best_value:.2f}")
+        print(f"[BEST] パラメータ:")
+        for k, v in study.best_params.items():
+            print(f"  {k}: {v}")
 
     if args.show_best:
-        u_range = [args.target_u] if args.target_u > 0 else [1, 2, 3, 4, 5]
-        for u_val in u_range:
-            try:
-                current_study_name = f"{args.study_name}_u{u_val}"
-                study = optuna.load_study(
-                    study_name=current_study_name,
-                    storage=args.db
-                )
-                print(f"\n=== Best for U={u_val} (Study: {current_study_name}) ===")
-                print(f"[BEST] スコア: {study.best_value:.2f}")
-                print(f"[BEST] パラメータ:")
-                for k, v in sorted(study.best_params.items()):
-                    print(f"  {k}: {v}")
-                
-            except Exception as e:
-                # print(f"[WARN] Study読み込み失敗 (U={u_val}): {e}")
-                pass
+        try:
+            study = optuna.load_study(
+                study_name=args.study_name,
+                storage=args.db
+            )
+            print(f"\n=== Best for {args.study_name} ===")
+            print(f"[BEST] スコア: {study.best_value:.2f}")
+            print(f"[BEST] パラメータ:")
+            for k, v in sorted(study.best_params.items()):
+                print(f"  {k}: {v}")
+            
+        except Exception as e:
+            # print(f"[WARN] Study読み込み失敗: {e}")
+            pass
 
     if args.export:
-        # Export best params for all U or specific U
-        # Since we have separate HP[1]...HP[5], we need to export them properly.
-        # Format: u{u}_{name} {value}
-        
-        all_best_params = {}
-        
-        # Collect params from all relevant studies
-        u_range = [args.target_u] if args.target_u > 0 else [1, 2, 3, 4, 5]
-        
-        for u in u_range:
-            try:
-                s = optuna.load_study(study_name=f"{args.study_name}_u{u}", storage=args.db)
-                # Add prefix
-                for k, v in s.best_params.items():
-                    all_best_params[f"u{u}_{k}"] = v
-            except:
-                pass
-        
-        if not all_best_params:
-            print("[ERROR] No studies found to export.")
-            sys.exit(1)
+        try:
+            study = optuna.load_study(study_name=args.study_name, storage=args.db)
+            export_path = PROJECT_ROOT / args.export
+            write_param_file(study.best_params, str(export_path))
+            print(f"[OK] 最良パラメータを {export_path} に出力しました")
 
-        export_path = PROJECT_ROOT / args.export
-        # Use simple write, write_param_file adds prefix but we already added it?
-        # write_param_file logic: if target_u > 0 writes u{target_u}_{k}.
-        # Here we have mixed U. So just write manually.
-        
-        with open(export_path, "w") as f:
-            for k, v in sorted(all_best_params.items()):
-                f.write(f"{k} {v}\n")
-        
-        print(f"[OK] 最良パラメータを {export_path} に出力しました")
+            # C++ Hardcoded snippet export
+            cpp_file = str(export_path).replace(".cfg", "_hardcoded.txt")
+            with open(cpp_file, "w") as f:
+                f.write("// === Optuna Global Tuned Params ===\n")
+                f.write(f"// Score: {study.best_value:.2f}\n\n")
+                f.write("// Paste into HyperParams declaration or init function\n")
+                
+                # We want to output initialization lines for the struct defaults
+                # e.g. double phase1 = 0....;
+                
+                params = study.best_params
+                
+                # Output format:
+                # double name = val;
+                
+                # Group by type/category for readability
+                f.write("// [Phases]\n")
+                for k in ["phase1", "phase2"]:
+                    if k in params: f.write(f"double {k} = {params[k]:.8f};\n")
 
-        # C++ Hardcoded snippet export
-        cpp_file = str(export_path).replace(".cfg", "_hardcoded.txt")
-        with open(cpp_file, "w") as f:
-            f.write("// === Optuna最適パラメータ (C++埋め込み用) ===\n")
-            f.write("// Paste this into adaptParams() or initialize HP[] with these values\n")
-            
-            for u in range(1, 6):
-                # Try to load study for this U
-                try:
-                    s = optuna.load_study(study_name=f"{args.study_name}_u{u}", storage=args.db)
-                    params = s.best_params
-                    f.write(f"\n    // --- U={u} ---\n")
-                    for k, v in sorted(params.items()):
-                        if k in ("rollout_depth", "num_particles"):
-                            f.write(f"    HP[{u}].{k} = {int(v)};\n")
-                        else:
-                            f.write(f"    HP[{u}].{k} = {v:.6f};\n")
-                except:
-                    pass
-        
-        print(f"[OK] C++埋め込み用コードを {cpp_file} に出力しました")
+                f.write("\n// [Weights]\n")
+                for k in sorted([p for p in params if "early" in p or "mid" in p or "late" in p]):
+                    f.write(f"double {k} = {params[k]:.8f};\n")
 
+                f.write("\n// [MCTS]\n")
+                for k in ["leader_mult", "ucb_c"]:
+                    if k in params: f.write(f"double {k} = {params[k]:.8f};\n")
 
-    if args.eval:
-        # NOTE: If we want to evaluate with U-specific parameters, we need to load a file that has uX_ prefix.
-        # The current implementation of main.cpp loadParams handles uX_ prefix.
-        # So we just pass the file path.
-        pass
+                f.write("\n// [Eval]\n")
+                for k in sorted([p for p in params if p.startswith("eval_")]):
+                    f.write(f"double {k} = {params[k]:.8f};\n")
+
+                f.write("\n// [Particles/Rollout]\n")
+                if "rollout_depth_max" in params: f.write(f"int rollout_depth_max = {int(params['rollout_depth_max'])};\n")
+                if "rollout_depth_min" in params: f.write(f"int rollout_depth_min = {int(params['rollout_depth_min'])};\n")
+                if "num_particles" in params: f.write(f"int num_particles = {int(params['num_particles'])};\n")
+                if "pf_noise_w" in params: f.write(f"double pf_noise_w = {params['pf_noise_w']:.8f};\n")
+                if "pf_noise_eps" in params: f.write(f"double pf_noise_eps = {params['pf_noise_eps']:.8f};\n")
+                
+                f.write("\n// [Boosts]\n")
+                for k in ["u_wb_boost", "u_wd_penalty", "m_leader_scale"]:
+                    if k in params: f.write(f"double {k} = {params[k]:.8f};\n")
+
+            print(f"[OK] C++埋め込み用コードを {cpp_file} に出力しました")
+
+        except Exception as e:
+            print(f"[ERROR] Export failed: {e}")
+
 
 if __name__ == "__main__":
     main()
