@@ -18,9 +18,9 @@ if(NOT DEFINED TARGET_ARCH)
     set(TARGET_ARCH native)
 endif()
 
-add_executable(${PROJECT_NAME} runner/main.cpp)
+add_executable(${PROJECT_NAME} src/main.cpp)
 
-target_include_directories(${PROJECT_NAME} PRIVATE ${TOPDIR}/include)
+target_include_directories(${PROJECT_NAME} PRIVATE ${TOPDIR}/src)
 target_link_libraries(${PROJECT_NAME} PRIVATE solve)
 
 add_subdirectory(src)

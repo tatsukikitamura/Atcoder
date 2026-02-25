@@ -1,0 +1,6 @@
+elapsed_nsec = 7859413
+PartySize = 16
+ParameterSum = 102891466
+PartyMembers = {
+1 3 6 7 8 11 12 13 14 15 16 19 20 21 23 24
+}

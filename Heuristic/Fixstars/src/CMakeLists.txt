@@ -10,4 +10,4 @@ add_library(${PROJECT_NAME} SHARED solve.cpp)
 
 target_compile_options(${PROJECT_NAME} PRIVATE -march=${TARGET_ARCH})
 
-target_include_directories(${PROJECT_NAME} PRIVATE ${TOPDIR}/include)
+target_include_directories(${PROJECT_NAME} PRIVATE ${TOPDIR}/src)
