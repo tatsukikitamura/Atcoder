@@ -339,8 +339,16 @@ inline LocalColorData lc_compute_with_deg(uint64_t cands, const int* deg, const 
 // At least one of u or v must be excluded from the clique.
 // Branching heuristic: pick u with fewest neighbors (most constrained),
 // then v = heaviest non-neighbor.
-void fpt_dfs(uint64_t candidates, GlobalState& gs) {
+//
+// Enhanced with:
+//   - Incremental cands_sum for O(PDIM) constraint pruning
+//   - Coloring upper bound (tighter than simple weight sum)
+//   - Per-branch coloring pre-pruning via lc_remove
+void fpt_dfs(uint64_t candidates, int* __restrict__ cands_sum, GlobalState& gs) {
     if (candidates == 0) return;
+
+    // Constraint pruning: if all remaining candidates can't satisfy rp, prune (O(PDIM))
+    if (!v_geq(cands_sum, gs.rp)) return;
 
     // Weight upper bound: sum of weights of all candidates
     long long ub = 0;
@@ -350,13 +358,9 @@ void fpt_dfs(uint64_t candidates, GlobalState& gs) {
     }
     if (ub <= gs.best_T.load(std::memory_order_relaxed)) return;
 
-    // Constraint upper bound: if even ALL candidates together fail rp, prune
-    {
-        alignas(64) int max_sum[PDIM] = {};
-        uint64_t tmp = candidates;
-        while (tmp) { v_iadd(max_sum, gs.vp[__builtin_ctzll(tmp)]); tmp &= tmp - 1; }
-        if (!v_geq(max_sum, gs.rp)) return;
-    }
+    // Tighter coloring upper bound
+    LocalColorData lc = lc_compute(candidates, gs);
+    if (lc.ub <= gs.best_T.load(std::memory_order_relaxed)) return;
 
     // Find a non-edge (u,v) in candidates
     int u = -1, v = -1;
@@ -391,10 +395,26 @@ void fpt_dfs(uint64_t candidates, GlobalState& gs) {
         return;
     }
 
-    // Branch 1: exclude v
-    fpt_dfs(candidates & ~(1ULL << v), gs);
-    // Branch 2: exclude u
-    fpt_dfs(candidates & ~(1ULL << u), gs);
+    // Branch 1: exclude v — pre-prune with coloring bound
+    {
+        LocalColorData lc1 = lc;
+        long long ub1 = lc_remove(lc1, v, gs);
+        if (ub1 > gs.best_T.load(std::memory_order_relaxed)) {
+            v_isub(cands_sum, gs.vp[v]);
+            fpt_dfs(candidates & ~(1ULL << v), cands_sum, gs);
+            v_iadd(cands_sum, gs.vp[v]);
+        }
+    }
+
+    // Branch 2: exclude u — pre-prune with coloring bound (modify lc in-place)
+    {
+        long long ub2 = lc_remove(lc, u, gs);
+        if (ub2 > gs.best_T.load(std::memory_order_relaxed)) {
+            v_isub(cands_sum, gs.vp[u]);
+            fpt_dfs(candidates & ~(1ULL << u), cands_sum, gs);
+            v_iadd(cands_sum, gs.vp[u]);
+        }
+    }
 }
 
 // Expand the FPT tree shallowly to collect independent subtasks for parallel execution.
@@ -403,11 +423,15 @@ void fpt_dfs(uint64_t candidates, GlobalState& gs) {
 //   (b) tasks.size() >= target_tasks → add as-is for fpt_dfs to finish.
 static void fpt_collect_tasks(
     uint64_t candidates,
+    int* __restrict__ cands_sum,
     GlobalState& gs,
     std::vector<uint64_t>& tasks,
     int target_tasks
 ) {
     if (candidates == 0) return;
+
+    // Constraint pruning
+    if (!v_geq(cands_sum, gs.rp)) return;
 
     // Prune by weight upper bound
     long long ub = 0;
@@ -448,8 +472,13 @@ static void fpt_collect_tasks(
         return;
     }
 
-    fpt_collect_tasks(candidates & ~(1ULL << v), gs, tasks, target_tasks);
-    fpt_collect_tasks(candidates & ~(1ULL << u), gs, tasks, target_tasks);
+    v_isub(cands_sum, gs.vp[v]);
+    fpt_collect_tasks(candidates & ~(1ULL << v), cands_sum, gs, tasks, target_tasks);
+    v_iadd(cands_sum, gs.vp[v]);
+
+    v_isub(cands_sum, gs.vp[u]);
+    fpt_collect_tasks(candidates & ~(1ULL << u), cands_sum, gs, tasks, target_tasks);
+    v_iadd(cands_sum, gs.vp[u]);
 }
 
 // ============================================================================
@@ -674,10 +703,14 @@ void solve(input_t &input, output_t &output) {
     if (N <= 24) {
         // === SMALL FPT PATH ===
         // N<=24, p=0.95: k = N - max_clique ≈ 4, so FPT tree has ~2^4 = 16 leaves.
-        // Expand the tree shallowly to collect >= 16 independent subtasks,
-        // then dispatch them via omp parallel for (dynamic) across 8 threads.
+        // Enhanced FPT with incremental cands_sum, coloring bound, and per-branch pruning.
         {
             uint64_t all_cands = (1ULL << N) - 1;
+
+            // Compute initial cands_sum
+            alignas(64) int init_cs[PDIM];
+            memset(init_cs, 0, sizeof(init_cs));
+            { uint64_t tmp = all_cands; while (tmp) { v_iadd(init_cs, gs.vp[__builtin_ctzll(tmp)]); tmp &= tmp - 1; } }
 
             #ifdef _OPENMP
             const int n_threads = 8;
@@ -689,20 +722,24 @@ void solve(input_t &input, output_t &output) {
 
             std::vector<uint64_t> tasks;
             tasks.reserve(target_tasks * 2);
-            fpt_collect_tasks(all_cands, gs, tasks, target_tasks);
+            fpt_collect_tasks(all_cands, init_cs, gs, tasks, target_tasks);
 
             const int ntasks = (int)tasks.size();
             #ifdef _OPENMP
             #pragma omp parallel for schedule(dynamic, 1) num_threads(n_threads)
             #endif
             for (int ti = 0; ti < ntasks; ++ti) {
-                fpt_dfs(tasks[ti], gs);
+                alignas(64) int cs[PDIM];
+                memset(cs, 0, sizeof(cs));
+                uint64_t tmp = tasks[ti];
+                while (tmp) { v_iadd(cs, gs.vp[__builtin_ctzll(tmp)]); tmp &= tmp - 1; }
+                fpt_dfs(tasks[ti], cs, gs);
             }
         }
     } else {
         // === LARGE PATH (N > 24) ===
-        // Strategy: minimal greedy for initial bound, then full BnB.
-        // SA is removed - every millisecond goes to BnB with BK pivot.
+        // BnB with BK pivot is more efficient for dense graphs at N=64.
+        // Branching factor ≈ 0.05*|cands| ≈ 3, much smaller than FPT's 2^k.
 
         // Full BnB
         #ifdef _OPENMP
