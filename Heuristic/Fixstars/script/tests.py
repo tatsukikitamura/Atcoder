@@ -148,8 +148,8 @@ def run_test(proj: Path, tc: str) -> dict:
     result['out_score'] = out_psum or 'N/A'
     if out_elapsed is not None:
         try:
-            val = int(out_elapsed) / 1e6 # Convert nanoseconds to milliseconds
-            result['elapsed'] = f'{val:.3f}ms'
+            val = int(out_elapsed) / 1e3 # Convert nanoseconds to microseconds
+            result['elapsed'] = f'{val:.1f}µs'
             result['elapsed_num'] = val
         except ValueError:
             result['elapsed'] = 'N/A'
@@ -323,7 +323,7 @@ def main():
     if skip_count:
         parts.append(c(f'SKIP: {skip_count}', YELLOW))
     parts.append(f'Total: {total}')
-    parts.append(c(f'Total Time: {total_time:.3f}ms', CYAN))
+    parts.append(c(f'Total Time: {total_time:.1f}µs', CYAN))
     print('  ' + '  '.join(parts))
     print()
 
