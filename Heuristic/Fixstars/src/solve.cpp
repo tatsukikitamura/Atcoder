@@ -26,12 +26,8 @@
 // SIMD codepath (AVX-512 vs AVX2 vs scalar) is selected by -march flag from CMake.
 // Use -march=native locally (AVX2), -march=icelake-client for contest (AVX-512).
 
-#include <algorithm>
-#include <limits>
 #include <cstring>
-#include <iostream>
 #include <atomic>
-#include <numeric>
 #include <vector>
 
 #if defined(__AVX512F__) || defined(__AVX2__)
@@ -56,17 +52,16 @@ struct GlobalState {
     // Best solution: best_T is atomic for fast lock-free reads in pruning,
     // spinlock protects the combined T+mask write to keep them consistent.
     alignas(64) std::atomic_flag best_lock = ATOMIC_FLAG_INIT;
-    alignas(64) std::atomic<long long> best_T{-1};
+    alignas(64) std::atomic<int> best_T{-1};
     uint64_t best_mask = 0;
 
     uint64_t adj[64];          // adjacency bitmasks (reordered)
-    long long weights[64];     // total weight per vertex
+    int weights[64];           // total weight per vertex
     alignas(64) int vp[64][PDIM]; // parameters per vertex
     alignas(64) int rp[PDIM];    // BOSS requirements
     int N;
     int reorder_map[64];       // reordered_id -> original_id
 };
-
 // ============================================================================
 // SIMD 128-element operations
 // ============================================================================
@@ -166,7 +161,7 @@ inline bool v_geq(const int* __restrict__ a, const int* __restrict__ b) {
 // ============================================================================
 // Update best solution (thread-safe via spinlock for T+mask consistency)
 // ============================================================================
-inline void update_best(GlobalState& gs, long long T, uint64_t mask) {
+inline void update_best(GlobalState& gs, int T, uint64_t mask) {
     // Quick check without lock (atomic read)
     if (T <= gs.best_T.load(std::memory_order_relaxed)) return;
 
@@ -188,10 +183,10 @@ inline void update_best(GlobalState& gs, long long T, uint64_t mask) {
 // one vertex is removed, instead of recoloring from scratch in O(|cands|²).
 struct LocalColorData {
     int       color[64];     // color[v] = color class assigned to v
-    long long cmax[64];      // cmax[c]  = max weight in color class c
+    int       cmax[64];      // cmax[c]  = max weight in color class c
     uint64_t  members[64];   // members[c] = bitmask of still-present vertices in class c
     int       num_colors;
-    long long ub;            // current upper bound = sum(cmax[c])
+    int       ub;            // current upper bound = sum(cmax[c])
 };
 
 // Full local greedy coloring, filling an LCData struct.
@@ -213,10 +208,20 @@ inline LocalColorData lc_compute(uint64_t cands, const GlobalState& gs) {
         lc.cmax[0] = gs.weights[v]; lc.num_colors = 1; lc.ub = gs.weights[v];
         return lc;
     }
-    if (n > 1) {
-        std::sort(order, order + n, [&](int a, int b) {
-            return __builtin_popcountll(cands & gs.adj[a]) > __builtin_popcountll(cands & gs.adj[b]);
-        });
+    // Bucket sort descending by degree in cands: O(N) vs std::sort's O(N log N).
+    // deg values are in [0, n-1], so 65-element bucket array is sufficient.
+    {
+        uint64_t buckets[65] = {};
+        for (int i = 0; i < n; ++i) {
+            int v = order[i];
+            int d = __builtin_popcountll(cands & gs.adj[v]);
+            buckets[d] |= 1ULL << v;
+        }
+        int si = 0;
+        for (int d = n; d >= 0; --d) {
+            uint64_t m = buckets[d];
+            while (m) { order[si++] = __builtin_ctzll(m); m &= m - 1; }
+        }
     }
 
     int local_color[64];
@@ -250,7 +255,7 @@ inline LocalColorData lc_compute(uint64_t cands, const GlobalState& gs) {
 // Remove vertex v from the coloring incrementally.
 // If v was the max of its color class, scan remaining members for new max.
 // Returns the updated upper bound.
-inline long long lc_remove(LocalColorData& lc, int v, const GlobalState& gs) {
+inline int lc_remove(LocalColorData& lc, int v, const GlobalState& gs) {
     int c = lc.color[v];
     lc.members[c] &= ~(1ULL << v);
 
@@ -258,7 +263,7 @@ inline long long lc_remove(LocalColorData& lc, int v, const GlobalState& gs) {
 
     // v was the max: find new max from remaining members
     lc.ub -= lc.cmax[c];
-    long long new_max = 0;
+    int new_max = 0;
     uint64_t m = lc.members[c];
     while (m) {
         int u = __builtin_ctzll(m);
@@ -271,15 +276,14 @@ inline long long lc_remove(LocalColorData& lc, int v, const GlobalState& gs) {
 }
 
 
-
 // Compute upper bound for child_cands using the parent's LocalColorData in O(|child_cands|).
 // child_cands ⊆ cands, so the parent's coloring is still a valid coloring for child_cands
 // (removing vertices never introduces new edges). The bound is slightly looser than a
 // fresh local recoloring but costs O(n) instead of O(n²).
-inline long long child_ub_from_parent_lc(
+inline int child_ub_from_parent_lc(
     uint64_t child_cands, const LocalColorData& lc, const GlobalState& gs)
 {
-    long long color_max[64] = {};
+    int color_max[64] = {};
     uint64_t tmp = child_cands;
     while (tmp) {
         int u = __builtin_ctzll(tmp);
@@ -287,7 +291,7 @@ inline long long child_ub_from_parent_lc(
         if (gs.weights[u] > color_max[c]) color_max[c] = gs.weights[u];
         tmp &= tmp - 1;
     }
-    long long ub = 0;
+    int ub = 0;
     for (int c = 0; c < lc.num_colors; ++c) ub += color_max[c];
     return ub;
 }
@@ -308,7 +312,16 @@ inline LocalColorData lc_compute_with_deg(uint64_t cands, const int* deg, const 
         lc.cmax[0] = gs.weights[v]; lc.num_colors = 1; lc.ub = gs.weights[v];
         return lc;
     }
-    std::sort(order, order + n, [&](int a, int b) { return deg[a] > deg[b]; });
+    // Bucket sort descending by precomputed deg[]: O(N) vs std::sort's O(N log N).
+    {
+        uint64_t buckets[65] = {};
+        for (int i = 0; i < n; ++i) buckets[deg[order[i]]] |= 1ULL << order[i];
+        int si = 0;
+        for (int d = n; d >= 0; --d) {
+            uint64_t m = buckets[d];
+            while (m) { order[si++] = __builtin_ctzll(m); m &= m - 1; }
+        }
+    }
 
     int local_color[64];
     memset(local_color, -1, sizeof(local_color));
@@ -344,18 +357,14 @@ inline LocalColorData lc_compute_with_deg(uint64_t cands, const int* deg, const 
 //   - Incremental cands_sum for O(PDIM) constraint pruning
 //   - Coloring upper bound (tighter than simple weight sum)
 //   - Per-branch coloring pre-pruning via lc_remove
-void fpt_dfs(uint64_t candidates, int* __restrict__ cands_sum, GlobalState& gs) {
+void fpt_dfs(uint64_t candidates, int cands_weight, int* __restrict__ cands_sum, GlobalState& gs) {
     if (candidates == 0) return;
 
     // Constraint pruning: if all remaining candidates can't satisfy rp, prune (O(PDIM))
     if (!v_geq(cands_sum, gs.rp)) return;
 
-    // Weight upper bound: sum of weights of all candidates
-    long long ub = 0;
-    {
-        uint64_t tmp = candidates;
-        while (tmp) { ub += gs.weights[__builtin_ctzll(tmp)]; tmp &= tmp - 1; }
-    }
+    // Weight upper bound: passed in incrementally — O(1) instead of O(|cands|)
+    int ub = cands_weight;
     if (ub <= gs.best_T.load(std::memory_order_relaxed)) return;
 
     // Tighter coloring upper bound
@@ -376,7 +385,7 @@ void fpt_dfs(uint64_t candidates, int* __restrict__ cands_sum, GlobalState& gs) 
                     min_adj = adj_cnt;
                     u = i;
                     v = -1;
-                    long long best_w = -1;
+                    int best_w = -1;
                     uint64_t na = non_adj;
                     while (na) {
                         int j = __builtin_ctzll(na);
@@ -398,20 +407,20 @@ void fpt_dfs(uint64_t candidates, int* __restrict__ cands_sum, GlobalState& gs) 
     // Branch 1: exclude v — pre-prune with coloring bound
     {
         LocalColorData lc1 = lc;
-        long long ub1 = lc_remove(lc1, v, gs);
+        int ub1 = lc_remove(lc1, v, gs);
         if (ub1 > gs.best_T.load(std::memory_order_relaxed)) {
             v_isub(cands_sum, gs.vp[v]);
-            fpt_dfs(candidates & ~(1ULL << v), cands_sum, gs);
+            fpt_dfs(candidates & ~(1ULL << v), cands_weight - gs.weights[v], cands_sum, gs);
             v_iadd(cands_sum, gs.vp[v]);
         }
     }
 
     // Branch 2: exclude u — pre-prune with coloring bound (modify lc in-place)
     {
-        long long ub2 = lc_remove(lc, u, gs);
+        int ub2 = lc_remove(lc, u, gs);
         if (ub2 > gs.best_T.load(std::memory_order_relaxed)) {
             v_isub(cands_sum, gs.vp[u]);
-            fpt_dfs(candidates & ~(1ULL << u), cands_sum, gs);
+            fpt_dfs(candidates & ~(1ULL << u), cands_weight - gs.weights[u], cands_sum, gs);
             v_iadd(cands_sum, gs.vp[u]);
         }
     }
@@ -423,6 +432,7 @@ void fpt_dfs(uint64_t candidates, int* __restrict__ cands_sum, GlobalState& gs) 
 //   (b) tasks.size() >= target_tasks → add as-is for fpt_dfs to finish.
 static void fpt_collect_tasks(
     uint64_t candidates,
+    int cands_weight,
     int* __restrict__ cands_sum,
     GlobalState& gs,
     std::vector<uint64_t>& tasks,
@@ -433,14 +443,13 @@ static void fpt_collect_tasks(
     // Constraint pruning
     if (!v_geq(cands_sum, gs.rp)) return;
 
-    // Prune by weight upper bound
-    long long ub = 0;
-    { uint64_t t = candidates; while (t) { ub += gs.weights[__builtin_ctzll(t)]; t &= t-1; } }
+    // Prune by weight upper bound: passed in incrementally — O(1) instead of O(|cands|)
+    int ub = cands_weight;
     if (ub <= gs.best_T.load(std::memory_order_relaxed)) return;
 
     // If we already have enough tasks, stop expanding and queue the rest for fpt_dfs
     if ((int)tasks.size() >= target_tasks) {
-        tasks.push_back(candidates);
+        tasks.emplace_back(candidates);
         return;
     }
 
@@ -457,7 +466,7 @@ static void fpt_collect_tasks(
                 if (adj_cnt < min_adj) {
                     min_adj = adj_cnt;
                     u = i;
-                    v = -1; long long bw = -1;
+                    v = -1; int bw = -1;
                     uint64_t na = non_adj;
                     while (na) { int j = __builtin_ctzll(na); if (gs.weights[j] > bw) { bw = gs.weights[j]; v = j; } na &= na-1; }
                 }
@@ -468,64 +477,17 @@ static void fpt_collect_tasks(
 
     if (u == -1) {
         // Leaf: all candidates are mutually adjacent
-        tasks.push_back(candidates);
+        tasks.emplace_back(candidates);
         return;
     }
 
     v_isub(cands_sum, gs.vp[v]);
-    fpt_collect_tasks(candidates & ~(1ULL << v), cands_sum, gs, tasks, target_tasks);
+    fpt_collect_tasks(candidates & ~(1ULL << v), cands_weight - gs.weights[v], cands_sum, gs, tasks, target_tasks);
     v_iadd(cands_sum, gs.vp[v]);
 
     v_isub(cands_sum, gs.vp[u]);
-    fpt_collect_tasks(candidates & ~(1ULL << u), cands_sum, gs, tasks, target_tasks);
+    fpt_collect_tasks(candidates & ~(1ULL << u), cands_weight - gs.weights[u], cands_sum, gs, tasks, target_tasks);
     v_iadd(cands_sum, gs.vp[u]);
-}
-
-// ============================================================================
-// Fast DFS for dense small graphs
-// ============================================================================
-void fast_dfs(
-    uint64_t current_mask,
-    uint64_t candidates,
-    long long current_T,
-    int* __restrict__ current_sum,
-    GlobalState& gs
-) {
-    // 1. Feasibility check (SIMD)
-    if (v_geq(current_sum, gs.rp)) {
-        update_best(gs, current_T, current_mask);
-    }
-
-    if (candidates == 0) return;
-
-    // 2. Local coloring upper bound (tighter than rem_max)
-    LocalColorData lc = lc_compute(candidates, gs);
-    if (current_T + lc.ub <= gs.best_T.load(std::memory_order_relaxed)) return;
-
-    // 3. Constraint pruning: sum + all candidates still can't satisfy rp?
-    {
-        alignas(64) int max_sum[PDIM];
-        memcpy(max_sum, current_sum, PDIM * sizeof(int));
-        uint64_t tmp2 = candidates;
-        while (tmp2) {
-            v_iadd(max_sum, gs.vp[__builtin_ctzll(tmp2)]);
-            tmp2 &= tmp2 - 1;
-        }
-        if (!v_geq(max_sum, gs.rp)) return;
-    }
-
-    while(candidates) {
-        int v = __builtin_ctzll(candidates);
-        uint64_t v_bit = 1ULL << v;
-        alignas(64) int next_sum[PDIM];
-        v_add(next_sum, current_sum, gs.vp[v]);
-
-        fast_dfs(current_mask | v_bit, candidates & gs.adj[v] & ~(v_bit | (v_bit - 1)), current_T + gs.weights[v], next_sum, gs);
-
-        candidates &= ~v_bit;
-        long long parent_ub = lc_remove(lc, v, gs);
-        if (current_T + parent_ub <= gs.best_T.load(std::memory_order_relaxed)) break;
-    }
 }
 
 // ============================================================================
@@ -541,11 +503,11 @@ void fast_dfs(
 void dfs_bnb(
     uint64_t mask,
     uint64_t cands,
-    long long T,
+    int T,
     int* __restrict__ sum,
     int* __restrict__ cands_sum,
     GlobalState& gs,
-    long long lc_ub   // local_color upper bound already computed by parent
+    int lc_ub   // local_color upper bound already computed by parent
 ) {
     if (v_geq(sum, gs.rp)) {
         update_best(gs, T, mask);
@@ -592,7 +554,9 @@ void dfs_bnb(
     // Branch set: candidates NOT adjacent to pivot, PLUS the pivot itself
     uint64_t branch_set = (cands & ~gs.adj[pivot]) | (1ULL << pivot);
 
-    // Collect and sort branch vertices by weight descending
+    // Collect branch vertices: __builtin_ctzll yields LSB-first = ascending index order
+    // = descending weight order, because solve() reorders vertices by weight descending.
+    // So no sort needed here.
     int branch_verts[64];
     int n_branch = 0;
     {
@@ -600,11 +564,6 @@ void dfs_bnb(
         while (tmp) {
             branch_verts[n_branch++] = __builtin_ctzll(tmp);
             tmp &= tmp - 1;
-        }
-        if (n_branch > 1) {
-            std::sort(branch_verts, branch_verts + n_branch, [&](int a, int b) {
-                return gs.weights[a] > gs.weights[b];
-            });
         }
     }
 
@@ -639,7 +598,7 @@ void dfs_bnb(
 
         // Compute child's lc_ub using parent's coloring: O(|child_cands|) instead of O(|cands|²).
         // child_cands ⊆ cands so parent lc is a valid (possibly non-tight) coloring for it.
-        long long child_lc_ub = child_ub_from_parent_lc(cands & gs.adj[v] & ~vb, lc, gs);
+        int child_lc_ub = child_ub_from_parent_lc(cands & gs.adj[v] & ~vb, lc, gs);
 
         // Add vertex v to clique and recurse
         v_iadd(sum, gs.vp[v]);
@@ -651,7 +610,118 @@ void dfs_bnb(
         v_isub(cands_sum, gs.vp[v]);
 
         // Incrementally remove v from the local coloring → O(|class|) instead of O(|cands|²)
-        long long parent_ub = lc_remove(lc, v, gs);
+        int parent_ub = lc_remove(lc, v, gs);
+        if (T + parent_ub <= gs.best_T.load(std::memory_order_relaxed)) break;
+    }
+}
+
+// ============================================================================
+// BnB task collection: pre-expand the BnB tree to collect fine-grained tasks.
+// This breaks up the vertex-0 dominance when its subtree is much larger than
+// other vertices', enabling proper load balancing across threads.
+// ============================================================================
+struct BnBTask {
+    uint64_t mask;
+    uint64_t cands;
+    int T;
+    int lc_ub;
+    alignas(64) int sum[PDIM];
+    alignas(64) int cands_sum[PDIM];
+};
+
+static void bnb_collect_tasks(
+    uint64_t mask,
+    uint64_t cands,
+    int T,
+    int* __restrict__ sum,
+    int* __restrict__ cands_sum,
+    int lc_ub,
+    GlobalState& gs,
+    std::vector<BnBTask>& tasks,
+    int target_tasks
+) {
+    // Mirror the pruning from dfs_bnb
+    if (v_geq(sum, gs.rp)) {
+        update_best(gs, T, mask);
+    }
+    if (cands == 0) return;
+    if (T + lc_ub <= gs.best_T.load(std::memory_order_relaxed)) return;
+
+    if (__builtin_popcountll(cands) == 1) {
+        int v = __builtin_ctzll(cands);
+        if (T + gs.weights[v] > gs.best_T.load(std::memory_order_relaxed)) {
+            alignas(64) int max_sum[PDIM];
+            v_add(max_sum, sum, gs.vp[v]);
+            if (v_geq(max_sum, gs.rp))
+                update_best(gs, T + gs.weights[v], mask | (1ULL << v));
+        }
+        return;
+    }
+
+    {
+        alignas(64) int max_sum[PDIM];
+        v_add(max_sum, sum, cands_sum);
+        if (!v_geq(max_sum, gs.rp)) return;
+    }
+
+    // If we already have enough tasks, push this node as a leaf for dfs_bnb to finish.
+    if ((int)tasks.size() >= target_tasks) {
+        BnBTask t;
+        t.mask = mask; t.cands = cands; t.T = T; t.lc_ub = lc_ub;
+        memcpy(t.sum,       sum,       PDIM * sizeof(int));
+        memcpy(t.cands_sum, cands_sum, PDIM * sizeof(int));
+        tasks.push_back(std::move(t));
+        return;
+    }
+
+    // Compute deg[] (reused by pivot selection and lc_compute_with_deg)
+    int deg[64];
+    int pivot = -1;
+    int max_adj_count = -1;
+    {
+        uint64_t tmp = cands;
+        while (tmp) {
+            int u = __builtin_ctzll(tmp);
+            int d = __builtin_popcountll(cands & gs.adj[u]);
+            deg[u] = d;
+            if (d > max_adj_count) { max_adj_count = d; pivot = u; }
+            tmp &= tmp - 1;
+        }
+    }
+
+    uint64_t branch_set = (cands & ~gs.adj[pivot]) | (1ULL << pivot);
+    int branch_verts[64];
+    int n_branch = 0;
+    { uint64_t tmp = branch_set; while (tmp) { branch_verts[n_branch++] = __builtin_ctzll(tmp); tmp &= tmp - 1; } }
+
+    alignas(64) int new_cands_sum[PDIM];
+    LocalColorData lc = lc_compute_with_deg(cands, deg, gs);
+    if (T + lc.ub <= gs.best_T.load(std::memory_order_relaxed)) return;
+
+    for (int bi = 0; bi < n_branch; ++bi) {
+        int v = branch_verts[bi];
+        uint64_t vb = 1ULL << v;
+
+        v_sub(new_cands_sum, cands_sum, gs.vp[v]);
+        {
+            uint64_t non_adj = cands & ~gs.adj[v];
+            while (non_adj) {
+                v_isub(new_cands_sum, gs.vp[__builtin_ctzll(non_adj)]);
+                non_adj &= non_adj - 1;
+            }
+        }
+
+        int child_lc_ub = child_ub_from_parent_lc(cands & gs.adj[v] & ~vb, lc, gs);
+
+        v_iadd(sum, gs.vp[v]);
+        bnb_collect_tasks(mask | vb, cands & gs.adj[v] & ~vb, T + gs.weights[v],
+                          sum, new_cands_sum, child_lc_ub, gs, tasks, target_tasks);
+        v_isub(sum, gs.vp[v]);
+
+        cands &= ~vb;
+        v_isub(cands_sum, gs.vp[v]);
+
+        int parent_ub = lc_remove(lc, v, gs);
         if (T + parent_ub <= gs.best_T.load(std::memory_order_relaxed)) break;
     }
 }
@@ -673,14 +743,19 @@ void solve(input_t &input, output_t &output) {
     gs.best_T.store(-1, std::memory_order_relaxed);
     gs.best_mask = 0;
 
-    // ---- Sort vertices by weight descending ----
-    struct VInfo { int id; long long w; };
+    // ---- Sort vertices by weight descending (insertion sort: N≤64, zero overhead) ----
+    struct VInfo { int id; int w; };
     VInfo vs[64];
     for (int i = 0; i < N; ++i) {
         vs[i].id = i; vs[i].w = 0;
         for (int k = 0; k < PDIM; ++k) vs[i].w += input.v[i][k];
     }
-    std::sort(vs, vs + N, [](const VInfo& a, const VInfo& b) { return a.w > b.w; });
+    for (int i = 1; i < N; ++i) {
+        VInfo key = vs[i];
+        int j = i - 1;
+        while (j >= 0 && vs[j].w < key.w) { vs[j + 1] = vs[j]; --j; }
+        vs[j + 1] = key;
+    }
 
     for (int i = 0; i < N; ++i) {
         int orig = vs[i].id;
@@ -707,10 +782,11 @@ void solve(input_t &input, output_t &output) {
         {
             uint64_t all_cands = (1ULL << N) - 1;
 
-            // Compute initial cands_sum
+            // Compute initial cands_sum and cands_weight
             alignas(64) int init_cs[PDIM];
             memset(init_cs, 0, sizeof(init_cs));
-            { uint64_t tmp = all_cands; while (tmp) { v_iadd(init_cs, gs.vp[__builtin_ctzll(tmp)]); tmp &= tmp - 1; } }
+            int init_cw = 0;
+            { uint64_t tmp = all_cands; while (tmp) { int b = __builtin_ctzll(tmp); v_iadd(init_cs, gs.vp[b]); init_cw += gs.weights[b]; tmp &= tmp - 1; } }
 
             #ifdef _OPENMP
             const int n_threads = 8;
@@ -718,11 +794,13 @@ void solve(input_t &input, output_t &output) {
             const int n_threads = 1;
             #endif
             // Collect 2x thread count tasks for good dynamic load balancing
-            const int target_tasks = n_threads * 2;
+            // Collect 8× thread count tasks: finer granularity eliminates the
+            // 6.6× max/median skew seen with the old 2× target.
+            const int target_tasks = n_threads * 8;
 
             std::vector<uint64_t> tasks;
             tasks.reserve(target_tasks * 2);
-            fpt_collect_tasks(all_cands, init_cs, gs, tasks, target_tasks);
+            fpt_collect_tasks(all_cands, init_cw, init_cs, gs, tasks, target_tasks);
 
             const int ntasks = (int)tasks.size();
             #ifdef _OPENMP
@@ -731,22 +809,36 @@ void solve(input_t &input, output_t &output) {
             for (int ti = 0; ti < ntasks; ++ti) {
                 alignas(64) int cs[PDIM];
                 memset(cs, 0, sizeof(cs));
+                int cw = 0;
                 uint64_t tmp = tasks[ti];
-                while (tmp) { v_iadd(cs, gs.vp[__builtin_ctzll(tmp)]); tmp &= tmp - 1; }
-                fpt_dfs(tasks[ti], cs, gs);
+                while (tmp) { int b = __builtin_ctzll(tmp); v_iadd(cs, gs.vp[b]); cw += gs.weights[b]; tmp &= tmp - 1; }
+                fpt_dfs(tasks[ti], cw, cs, gs);
             }
         }
     } else {
         // === LARGE PATH (N > 24) ===
         // BnB with BK pivot is more efficient for dense graphs at N=64.
-        // Branching factor ≈ 0.05*|cands| ≈ 3, much smaller than FPT's 2^k.
+        //
+        // Problem: vertex 0 (heaviest, most neighbors) can account for >60% of
+        // total work as a single serial task, starving all other threads.
+        //
+        // Fix: pre-expand the BnB tree for ALL root vertices into a shared task
+        // pool (target = 8× thread count), then execute the pool in parallel.
+        // This splits vertex 0's monolithic subtree into many fine-grained tasks.
 
-        // Full BnB
         #ifdef _OPENMP
-        #pragma omp parallel for schedule(dynamic, 1) num_threads(8)
+        const int n_threads_bnb = 8;
+        #else
+        const int n_threads_bnb = 1;
         #endif
-        for (int i = 0; i < N; ++i) {
+        // 8× threads gives enough granularity: even a 4× skewed task is bounded
+        // to ≤1 extra slot-time on 8 hardware threads.
+        const int target_bnb = n_threads_bnb * 8;
 
+        std::vector<BnBTask> bnb_tasks;
+        bnb_tasks.reserve(target_bnb * 2 + N);
+
+        for (int i = 0; i < N; ++i) {
             alignas(64) int ss[PDIM];
             memcpy(ss, gs.vp[i], PDIM * sizeof(int));
 
@@ -757,7 +849,20 @@ void solve(input_t &input, output_t &output) {
             memset(cs, 0, sizeof(cs));
             { uint64_t tmp = c; while (tmp) { v_iadd(cs, gs.vp[__builtin_ctzll(tmp)]); tmp &= tmp-1; } }
 
-            dfs_bnb(1ULL << i, c, gs.weights[i], ss, cs, gs, lc_compute(c, gs).ub);
+            bnb_collect_tasks(1ULL << i, c, gs.weights[i], ss, cs,
+                              lc_compute(c, gs).ub, gs, bnb_tasks, target_bnb);
+        }
+
+        const int ntasks_bnb = (int)bnb_tasks.size();
+        #ifdef _OPENMP
+        #pragma omp parallel for schedule(dynamic, 1) num_threads(n_threads_bnb)
+        #endif
+        for (int ti = 0; ti < ntasks_bnb; ++ti) {
+            BnBTask& t = bnb_tasks[ti];
+            alignas(64) int sum[PDIM], cands_sum[PDIM];
+            memcpy(sum,       t.sum,       PDIM * sizeof(int));
+            memcpy(cands_sum, t.cands_sum, PDIM * sizeof(int));
+            dfs_bnb(t.mask, t.cands, t.T, sum, cands_sum, gs, t.lc_ub);
         }
     }
 
@@ -765,18 +870,16 @@ void solve(input_t &input, output_t &output) {
     uint64_t fM = gs.best_mask;
     if (fM != 0) {
         // Recalculate T from mask to guarantee correctness
-        long long fT = 0;
-        for (int i = 0; i < N; ++i)
-            if (fM & (1ULL << i)) fT += gs.weights[i];
+        int fT = 0;
+        { uint64_t tmp = fM; while (tmp) { fT += gs.weights[__builtin_ctzll(tmp)]; tmp &= tmp - 1; } }
 
         output.T = fT;
         output.K_size = __builtin_popcountll(fM);
-        int res[64];
+        // Collect original IDs into a bitmask and iterate LSB-first → naturally ascending order.
+        // Replaces res[] array + std::sort entirely.
+        uint64_t orig_mask = 0;
+        { uint64_t tmp = fM; while (tmp) { int i = __builtin_ctzll(tmp); orig_mask |= 1ULL << gs.reorder_map[i]; tmp &= tmp - 1; } }
         int cnt = 0;
-        for (int i = 0; i < N; ++i)
-            if (fM & (1ULL << i)) res[cnt++] = gs.reorder_map[i] + 1;
-        std::sort(res, res + cnt);
-        for (int i = 0; i < output.K_size; ++i)
-            output.members[i] = res[i];
+        { uint64_t tmp = orig_mask; while (tmp) { int j = __builtin_ctzll(tmp); output.members[cnt++] = j + 1; tmp &= tmp - 1; } }
     }
 }

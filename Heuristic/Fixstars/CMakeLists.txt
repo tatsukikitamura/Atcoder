@@ -24,3 +24,4 @@ target_include_directories(${PROJECT_NAME} PRIVATE ${TOPDIR}/src)
 target_link_libraries(${PROJECT_NAME} PRIVATE solve)
 
 add_subdirectory(src)
+add_subdirectory(bench)
