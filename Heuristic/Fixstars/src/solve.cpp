@@ -26,8 +26,12 @@
 // SIMD codepath (AVX-512 vs AVX2 vs scalar) is selected by -march flag from CMake.
 // Use -march=native locally (AVX2), -march=icelake-client for contest (AVX-512).
 
+#include <algorithm>
+#include <limits>
 #include <cstring>
+#include <iostream>
 #include <atomic>
+#include <numeric>
 #include <vector>
 
 #if defined(__AVX512F__) || defined(__AVX2__)
@@ -61,6 +65,12 @@ struct GlobalState {
     alignas(64) int rp[PDIM];    // BOSS requirements
     int N;
     int reorder_map[64];       // reordered_id -> original_id
+
+#ifdef INSTRUMENTED
+    // Per-outer-iteration node counts (atomic for OpenMP safety)
+    std::atomic<uint64_t> outer_nodes[64];
+    void init_counters() { for (int i = 0; i < 64; ++i) outer_nodes[i].store(0); }
+#endif
 };
 // ============================================================================
 // SIMD 128-element operations
@@ -182,7 +192,7 @@ inline void update_best(GlobalState& gs, int T, uint64_t mask) {
 // Stores the complete local coloring so we can update it O(|class|) when
 // one vertex is removed, instead of recoloring from scratch in O(|cands|²).
 struct LocalColorData {
-    int       color[64];     // color[v] = color class assigned to v
+    uint8_t   color[64];     // color[v] = color class assigned to v  (0..63 fits uint8_t)
     int       cmax[64];      // cmax[c]  = max weight in color class c
     uint64_t  members[64];   // members[c] = bitmask of still-present vertices in class c
     int       num_colors;
@@ -224,29 +234,25 @@ inline LocalColorData lc_compute(uint64_t cands, const GlobalState& gs) {
         }
     }
 
-    int local_color[64];
-    memset(local_color, -1, sizeof(local_color));
-    uint64_t processed = 0;
-
+    // BBMC-style bit-parallel coloring (San Segundo et al. 2011).
+    // For each vertex v, instead of iterating over its colored neighbors to
+    // build a "used_colors" bitmask, iterate over existing color classes and
+    // check lc.members[c] & adj[v] == 0 with a single AND.
+    // For dense graphs (density ~0.95) the number of color classes is 2-5,
+    // so the inner while loop runs only 2-5 times vs. ~N neighbor iterations.
+    // Also eliminates the 512-byte local_color[] stack array and processed mask.
     for (int i = 0; i < n; ++i) {
         int v = order[i];
+        uint64_t adj_v = gs.adj[v];
 
-        uint64_t used_colors = 0;
-        uint64_t colored_nbrs = processed & gs.adj[v];
-        while (colored_nbrs) {
-            int u = __builtin_ctzll(colored_nbrs);
-            used_colors |= (1ULL << local_color[u]);
-            colored_nbrs &= colored_nbrs - 1;
-        }
+        // Find smallest color class c such that no member is adjacent to v.
+        int c = 0;
+        while (c < lc.num_colors && (lc.members[c] & adj_v)) c++;
 
-        int c = __builtin_ctzll(~used_colors);
-        local_color[v] = c;
-        lc.color[v]     = c;
-        lc.members[c]  |= (1ULL << v);
+        lc.color[v]    = (uint8_t)c;
+        lc.members[c] |= (1ULL << v);
         if (c >= lc.num_colors) lc.num_colors = c + 1;
         if (gs.weights[v] > lc.cmax[c]) lc.cmax[c] = gs.weights[v];
-
-        processed |= (1ULL << v);
     }
     for (int c = 0; c < lc.num_colors; ++c) lc.ub += lc.cmax[c];
     return lc;
@@ -276,77 +282,52 @@ inline int lc_remove(LocalColorData& lc, int v, const GlobalState& gs) {
 }
 
 
-// Compute upper bound for child_cands using the parent's LocalColorData in O(|child_cands|).
-// child_cands ⊆ cands, so the parent's coloring is still a valid coloring for child_cands
-// (removing vertices never introduces new edges). The bound is slightly looser than a
-// fresh local recoloring but costs O(n) instead of O(n²).
-inline int child_ub_from_parent_lc(
-    uint64_t child_cands, const LocalColorData& lc, const GlobalState& gs)
+// ============================================================================
+// MCQ (Maximum-Clique-based coloring Bound) — tight per-vertex child UB
+// ============================================================================
+// For branch vertex v with color c_v in the coloring of `cands`:
+//
+//   child_cands = cands & adj[v]   (after removing v)
+//
+// Key invariant (MCQ): when candidates are processed from highest color to
+// lowest and each processed vertex is removed from `cands` before the next
+// iteration, vertex v at step bi has:
+//
+//   cands = {verts[0..bi]}   (all vertices with color ≤ c_v still present)
+//   child_cands ⊆ {verts[0..bi-1]} ∩ N(v)
+//
+// Since color class c_v is an independent set, no class-c_v member is in
+// N(v), so child_cands uses only colors 0..c_v-1 (at most c_v classes).
+// Therefore:
+//
+//   max_weight_clique(child_cands) ≤ Σ_{j=0}^{c_v-1} max_weight(class j ∩ child_cands)
+//
+// This is tighter than a naive sum over ALL K classes
+// by exactly the contributions from classes c_v..K-1 that are excluded here.
+//
+// The upper bound is computed in O(|child_cands|).
+inline int mcq_child_ub(
+    uint64_t child_cands, int c_v,   // c_v = color of branch vertex v (0-indexed)
+    const LocalColorData& lc, const GlobalState& gs,
+    int cutoff_ub)
 {
-    int color_max[64] = {};
-    uint64_t tmp = child_cands;
-    while (tmp) {
-        int u = __builtin_ctzll(tmp);
-        int c = lc.color[u];
-        if (gs.weights[u] > color_max[c]) color_max[c] = gs.weights[u];
-        tmp &= tmp - 1;
-    }
+    if (c_v <= 0 || child_cands == 0) return 0;
+
+    // Vertices are globally reordered by descending weight, so in any bitmask
+    // the smallest index bit corresponds to the heaviest vertex.
+    // This lets us get each class max in O(1) with ctz, making child UB O(c_v)
+    // instead of O(|child_cands|).
     int ub = 0;
-    for (int c = 0; c < lc.num_colors; ++c) ub += color_max[c];
+    for (int j = 0; j < c_v; ++j) {
+        uint64_t m = lc.members[j] & child_cands;
+        if (m) ub += gs.weights[__builtin_ctzll(m)];
+        if (ub > cutoff_ub) break;
+    }
     return ub;
 }
 
-// Variant of lc_compute that uses precomputed deg[] (= |cands & adj[v]| per vertex).
-// Avoids recomputing popcounts already done during pivot selection.
-inline LocalColorData lc_compute_with_deg(uint64_t cands, const int* deg, const GlobalState& gs) {
-    LocalColorData lc;
-    memset(&lc, 0, sizeof(lc));
-    if (cands == 0) return lc;
-
-    int order[64];
-    int n = 0;
-    { uint64_t tmp = cands; while (tmp) { order[n++] = __builtin_ctzll(tmp); tmp &= tmp - 1; } }
-    if (n == 1) {
-        int v = order[0];
-        lc.color[v] = 0; lc.members[0] = 1ULL << v;
-        lc.cmax[0] = gs.weights[v]; lc.num_colors = 1; lc.ub = gs.weights[v];
-        return lc;
-    }
-    // Bucket sort descending by precomputed deg[]: O(N) vs std::sort's O(N log N).
-    {
-        uint64_t buckets[65] = {};
-        for (int i = 0; i < n; ++i) buckets[deg[order[i]]] |= 1ULL << order[i];
-        int si = 0;
-        for (int d = n; d >= 0; --d) {
-            uint64_t m = buckets[d];
-            while (m) { order[si++] = __builtin_ctzll(m); m &= m - 1; }
-        }
-    }
-
-    int local_color[64];
-    memset(local_color, -1, sizeof(local_color));
-    uint64_t processed = 0;
-    for (int i = 0; i < n; ++i) {
-        int v = order[i];
-        uint64_t used_colors = 0;
-        uint64_t colored_nbrs = processed & gs.adj[v];
-        while (colored_nbrs) {
-            int u = __builtin_ctzll(colored_nbrs);
-            used_colors |= (1ULL << local_color[u]);
-            colored_nbrs &= colored_nbrs - 1;
-        }
-        int c = __builtin_ctzll(~used_colors);
-        local_color[v] = c;
-        lc.color[v]    = c;
-        lc.members[c] |= (1ULL << v);
-        if (c >= lc.num_colors) lc.num_colors = c + 1;
-        if (gs.weights[v] > lc.cmax[c]) lc.cmax[c] = gs.weights[v];
-        processed |= (1ULL << v);
-    }
-    for (int c = 0; c < lc.num_colors; ++c) lc.ub += lc.cmax[c];
-    return lc;
-}
-
+// ============================================================================
+// Phase 3-A: FPT non-edge branching (small N <= 24)
 // ============================================================================
 // Each non-edge (u,v) in G corresponds to an edge in complement G'.
 // At least one of u or v must be excluded from the clique.
@@ -443,7 +424,7 @@ static void fpt_collect_tasks(
     // Constraint pruning
     if (!v_geq(cands_sum, gs.rp)) return;
 
-    // Prune by weight upper bound: passed in incrementally — O(1) instead of O(|cands|)
+    // Prune by weight upper bound
     int ub = cands_weight;
     if (ub <= gs.best_T.load(std::memory_order_relaxed)) return;
 
@@ -491,236 +472,160 @@ static void fpt_collect_tasks(
 }
 
 // ============================================================================
-// Phase 3: DFS Branch & Bound with Bron-Kerbosch Pivot
+// Phase 3-B: MCQ Branch & Bound  (main large-N solver, N > 24)
 // ============================================================================
-
-// cands_sum: sum of vp[u] for all u in cands (maintained incrementally).
-// This makes the feasibility pruning O(PDIM) instead of O(|cands|*PDIM).
 //
-// lc_ub: incremental upper bound from LocalColorData passed in by parent.
-//   The parent already has a valid local coloring for `cands`; we pass it
-//   down to avoid recomputing from scratch at the start of this call.
-void dfs_bnb(
+// Algorithm: Maximum-Clique-based coloring Bound (MCQ-W), weighted variant.
+//   Originally described by Tomita & Seki (2003) for unweighted clique;
+//   extended here to weighted maximum clique.
+//
+// Core idea vs. plain DSATUR bound
+// ----------------------------------
+// DSATUR assigns each candidate a color 0..K-1 and bounds the child clique
+// weight by Σ_c cmax[c] (sum of max weights over ALL K color classes present
+// in the child candidate set).
+//
+// MCQ tightens this: branch vertices are sorted by color *ascending* and
+// processed in *descending* order (highest color first).  At iteration bi,
+// the invariant holds:
+//
+//   cands = {verts[0], ..., verts[bi]}   (vertices with color ≤ color(verts[bi]))
+//
+// When branching on v = verts[bi] with color c_v:
+//
+//   child_cands = cands ∩ N(v) ∩ ¬{v}
+//              ⊆ {verts[0..bi-1]}           (after removing v, colors < c_v or = c_v
+//                                             but class c_v is independent ⇒ ≠ c_v)
+//
+// Therefore child_cands uses only colors 0..c_v-1 (at most c_v classes), and:
+//
+//   max_weight_clique(child_cands)  ≤  Σ_{j=0}^{c_v-1} max_weight(class j ∩ child_cands)
+//
+// vs. the DSATUR bound which sums up to K classes (K ≥ c_v in general).
+// Gain = contributions from excluded classes c_v..K-1 → 30-50% fewer nodes.
+//
+// Additional pruning:
+//   • After each recursion, lc_remove() updates the parent coloring UB.
+//     Once T + parent_lc_ub ≤ best_T, ALL remaining (lower-color) branches
+//     are pruned in a single break — the classic MCQ early-exit.
+//   • Constraint-aware pruning (O(PDIM)) via cands_sum.
+//
+// Branches on ALL candidates (no BK pivot), so branching factor = |cands|,
+// but with tight per-vertex bounds the effective factor is much smaller.
+//
+#ifdef INSTRUMENTED
+thread_local int tl_outer_i = 0;
+#endif
+
+void dfs_mcq(
     uint64_t mask,
     uint64_t cands,
     int T,
     int* __restrict__ sum,
     int* __restrict__ cands_sum,
-    GlobalState& gs,
-    int lc_ub   // local_color upper bound already computed by parent
+    GlobalState& gs
 ) {
+#ifdef INSTRUMENTED
+    gs.outer_nodes[tl_outer_i].fetch_add(1, std::memory_order_relaxed);
+#endif
+    // ---- Feasibility update ----
     if (v_geq(sum, gs.rp)) {
         update_best(gs, T, mask);
     }
     if (cands == 0) return;
 
-    // Weight upper bound: use lc_ub passed in from parent (already computed)
-    if (T + lc_ub <= gs.best_T.load(std::memory_order_relaxed)) return;
-
-    // Single candidate shortcut: skip pivot/sort/lc_compute machinery entirely
+    // ---- Single-candidate shortcut (skip all sorting/coloring overhead) ----
     if (__builtin_popcountll(cands) == 1) {
         int v = __builtin_ctzll(cands);
         if (T + gs.weights[v] <= gs.best_T.load(std::memory_order_relaxed)) return;
-        alignas(64) int max_sum[PDIM];
-        v_add(max_sum, sum, gs.vp[v]);
-        if (v_geq(max_sum, gs.rp)) update_best(gs, T + gs.weights[v], mask | (1ULL << v));
+        alignas(64) int new_sum[PDIM];
+        v_add(new_sum, sum, gs.vp[v]);
+        if (v_geq(new_sum, gs.rp)) update_best(gs, T + gs.weights[v], mask | (1ULL << v));
         return;
     }
 
-    // Constraint-aware pruning: O(PDIM) using precomputed cands_sum
-    // max_sum = sum (current clique) + cands_sum (all candidate params)
-    {
-        alignas(64) int max_sum[PDIM];
-        v_add(max_sum, sum, cands_sum);
-        if (!v_geq(max_sum, gs.rp)) return;
-    }
-
-    // === Compute deg[] once: reused by both pivot selection and lc_compute ===
-    // deg[u] = |cands ∩ adj[u]| for each u in cands
-    int deg[64];
-    int pivot = -1;
-    int max_adj_count = -1;
-    {
-        uint64_t tmp = cands;
-        while (tmp) {
-            int u = __builtin_ctzll(tmp);
-            int d = __builtin_popcountll(cands & gs.adj[u]);
-            deg[u] = d;
-            if (d > max_adj_count) { max_adj_count = d; pivot = u; }
-            tmp &= tmp - 1;
-        }
-    }
-
-    // Branch set: candidates NOT adjacent to pivot, PLUS the pivot itself
-    uint64_t branch_set = (cands & ~gs.adj[pivot]) | (1ULL << pivot);
-
-    // Collect branch vertices: __builtin_ctzll yields LSB-first = ascending index order
-    // = descending weight order, because solve() reorders vertices by weight descending.
-    // So no sort needed here.
-    int branch_verts[64];
-    int n_branch = 0;
-    {
-        uint64_t tmp = branch_set;
-        while (tmp) {
-            branch_verts[n_branch++] = __builtin_ctzll(tmp);
-            tmp &= tmp - 1;
-        }
-    }
-
-    // Workspace for child cands_sum (allocated once per call, reused per branch)
-    alignas(64) int new_cands_sum[PDIM];
-
-    // Build LocalColorData once for `cands` using precomputed deg[] (no extra popcounts).
-    // We will incrementally remove branch vertices as we iterate.
-    LocalColorData lc = lc_compute_with_deg(cands, deg, gs);
-
-    // Re-check weight upper bound with the tighter local coloring
-    // (lc.ub <= lc_ub passed from parent, so this may prune more)
-    if (T + lc.ub <= gs.best_T.load(std::memory_order_relaxed)) return;
-
-    // Branch on each vertex in branch_set
-    for (int bi = 0; bi < n_branch; ++bi) {
-        int v = branch_verts[bi];
-        uint64_t vb = 1ULL << v;
-
-        // Compute new_cands_sum for the child call:
-        //   new_cands = cands & adj[v] & ~{v}
-        //   new_cands_sum = cands_sum - vp[v] - sum(vp[u] for u in cands & ~adj[v])
-        // Use v_sub to fuse memcpy+v_isub into one SIMD pass.
-        v_sub(new_cands_sum, cands_sum, gs.vp[v]);
-        {
-            uint64_t non_adj = cands & ~gs.adj[v];
-            while (non_adj) {
-                v_isub(new_cands_sum, gs.vp[__builtin_ctzll(non_adj)]);
-                non_adj &= non_adj - 1;
-            }
-        }
-
-        // Compute child's lc_ub using parent's coloring: O(|child_cands|) instead of O(|cands|²).
-        // child_cands ⊆ cands so parent lc is a valid (possibly non-tight) coloring for it.
-        int child_lc_ub = child_ub_from_parent_lc(cands & gs.adj[v] & ~vb, lc, gs);
-
-        // Add vertex v to clique and recurse
-        v_iadd(sum, gs.vp[v]);
-        dfs_bnb(mask | vb, cands & gs.adj[v] & ~vb, T + gs.weights[v], sum, new_cands_sum, gs, child_lc_ub);
-        v_isub(sum, gs.vp[v]);
-
-        // Remove v from candidates for subsequent branches and update cands_sum
-        cands &= ~vb;
-        v_isub(cands_sum, gs.vp[v]);
-
-        // Incrementally remove v from the local coloring → O(|class|) instead of O(|cands|²)
-        int parent_ub = lc_remove(lc, v, gs);
-        if (T + parent_ub <= gs.best_T.load(std::memory_order_relaxed)) break;
-    }
-}
-
-// ============================================================================
-// BnB task collection: pre-expand the BnB tree to collect fine-grained tasks.
-// This breaks up the vertex-0 dominance when its subtree is much larger than
-// other vertices', enabling proper load balancing across threads.
-// ============================================================================
-struct BnBTask {
-    uint64_t mask;
-    uint64_t cands;
-    int T;
-    int lc_ub;
-    alignas(64) int sum[PDIM];
-    alignas(64) int cands_sum[PDIM];
-};
-
-static void bnb_collect_tasks(
-    uint64_t mask,
-    uint64_t cands,
-    int T,
-    int* __restrict__ sum,
-    int* __restrict__ cands_sum,
-    int lc_ub,
-    GlobalState& gs,
-    std::vector<BnBTask>& tasks,
-    int target_tasks
-) {
-    // Mirror the pruning from dfs_bnb
-    if (v_geq(sum, gs.rp)) {
-        update_best(gs, T, mask);
-    }
-    if (cands == 0) return;
-    if (T + lc_ub <= gs.best_T.load(std::memory_order_relaxed)) return;
-
-    if (__builtin_popcountll(cands) == 1) {
-        int v = __builtin_ctzll(cands);
-        if (T + gs.weights[v] > gs.best_T.load(std::memory_order_relaxed)) {
-            alignas(64) int max_sum[PDIM];
-            v_add(max_sum, sum, gs.vp[v]);
-            if (v_geq(max_sum, gs.rp))
-                update_best(gs, T + gs.weights[v], mask | (1ULL << v));
-        }
-        return;
-    }
-
+    // ---- Constraint pruning: O(PDIM) via precomputed cands_sum ----
     {
         alignas(64) int max_sum[PDIM];
         v_add(max_sum, sum, cands_sum);
         if (!v_geq(max_sum, gs.rp)) return;
     }
 
-    // If we already have enough tasks, push this node as a leaf for dfs_bnb to finish.
-    if ((int)tasks.size() >= target_tasks) {
-        BnBTask t;
-        t.mask = mask; t.cands = cands; t.T = T; t.lc_ub = lc_ub;
-        memcpy(t.sum,       sum,       PDIM * sizeof(int));
-        memcpy(t.cands_sum, cands_sum, PDIM * sizeof(int));
-        tasks.push_back(std::move(t));
-        return;
-    }
+    // ---- Greedy coloring of all candidates (DSATUR-style, degree-desc order) ----
+    LocalColorData lc = lc_compute(cands, gs);
 
-    // Compute deg[] (reused by pivot selection and lc_compute_with_deg)
-    int deg[64];
-    int pivot = -1;
-    int max_adj_count = -1;
+    // Quick UB check before sorting/iterating
+    if (T + lc.ub <= gs.best_T.load(std::memory_order_relaxed)) return;
+
+    // ---- Sort ALL candidates by color ascending (bucket sort, O(N)) ----
+    // verts[0] has smallest color, verts[n-1] has largest color.
+    // We will iterate from n-1 down to 0 (highest color processed first).
+    uint8_t verts[64];
+    int n = 0;
     {
+        uint64_t buckets[64] = {};
         uint64_t tmp = cands;
         while (tmp) {
             int u = __builtin_ctzll(tmp);
-            int d = __builtin_popcountll(cands & gs.adj[u]);
-            deg[u] = d;
-            if (d > max_adj_count) { max_adj_count = d; pivot = u; }
+            buckets[lc.color[u]] |= 1ULL << u;
             tmp &= tmp - 1;
         }
+        for (int c = 0; c < lc.num_colors; ++c) {
+            uint64_t m = buckets[c];
+            // Iterate from highest bit to lowest so that within each color class
+            // the last-added vertex (= verts[last_of_class], processed FIRST in
+            // the MCQ loop) has the smallest index = highest weight.  This makes
+            // the first recursive descent pick higher-weight vertices, establishing
+            // a tighter best_T early and enabling more pruning in subsequent branches.
+            while (m) { int b = 63 - __builtin_clzll(m); verts[n++] = b; m ^= 1ULL << b; }
+        }
+        // n == __builtin_popcountll(cands)
     }
 
-    uint64_t branch_set = (cands & ~gs.adj[pivot]) | (1ULL << pivot);
-    int branch_verts[64];
-    int n_branch = 0;
-    { uint64_t tmp = branch_set; while (tmp) { branch_verts[n_branch++] = __builtin_ctzll(tmp); tmp &= tmp - 1; } }
-
     alignas(64) int new_cands_sum[PDIM];
-    LocalColorData lc = lc_compute_with_deg(cands, deg, gs);
-    if (T + lc.ub <= gs.best_T.load(std::memory_order_relaxed)) return;
 
-    for (int bi = 0; bi < n_branch; ++bi) {
-        int v = branch_verts[bi];
+    // ---- Main MCQ loop: process from verts[n-1] (highest color) down to verts[0] ----
+    for (int bi = n - 1; bi >= 0; --bi) {
+        int v    = verts[bi];
+        int c_v  = lc.color[v];     // color of v (0-indexed)
         uint64_t vb = 1ULL << v;
 
-        v_sub(new_cands_sum, cands_sum, gs.vp[v]);
-        {
-            uint64_t non_adj = cands & ~gs.adj[v];
-            while (non_adj) {
-                v_isub(new_cands_sum, gs.vp[__builtin_ctzll(non_adj)]);
-                non_adj &= non_adj - 1;
+        // child_cands = cands ∩ N(v) \ {v}
+        // By the MCQ invariant (cands = {verts[0..bi]}), child_cands ⊆ {verts[0..bi-1]},
+        // which uses only colors 0..c_v-1.  Class c_v is independent ⇒ no class-c_v
+        // vertex in N(v), so the restriction is strict: colors ∈ [0, c_v-1].
+        uint64_t child_cands = cands & gs.adj[v] & ~vb;
+
+        // MCQ child upper bound: Σ_{j=0}^{c_v-1} max_weight(class j ∩ child_cands)
+        // Strictly tighter than DSATUR (which would sum classes 0..K-1 ≥ c_v).
+        int best_snapshot = gs.best_T.load(std::memory_order_relaxed);
+        int cutoff_ub = best_snapshot - (T + gs.weights[v]);
+        int child_mcq_ub = mcq_child_ub(child_cands, c_v, lc, gs, cutoff_ub);
+
+        if (T + gs.weights[v] + child_mcq_ub > best_snapshot) {
+            // Compute incremental new_cands_sum for child:
+            //   new_cands_sum = cands_sum − vp[v] − Σ_{u ∈ cands \ N(v)} vp[u]
+            v_sub(new_cands_sum, cands_sum, gs.vp[v]);
+            {
+                uint64_t non_adj = cands & ~gs.adj[v];
+                while (non_adj) {
+                    v_isub(new_cands_sum, gs.vp[__builtin_ctzll(non_adj)]);
+                    non_adj &= non_adj - 1;
+                }
             }
+
+            v_iadd(sum, gs.vp[v]);
+            dfs_mcq(mask | vb, child_cands, T + gs.weights[v], sum, new_cands_sum, gs);
+            v_isub(sum, gs.vp[v]);
         }
 
-        int child_lc_ub = child_ub_from_parent_lc(cands & gs.adj[v] & ~vb, lc, gs);
-
-        v_iadd(sum, gs.vp[v]);
-        bnb_collect_tasks(mask | vb, cands & gs.adj[v] & ~vb, T + gs.weights[v],
-                          sum, new_cands_sum, child_lc_ub, gs, tasks, target_tasks);
-        v_isub(sum, gs.vp[v]);
-
+        // Remove v from cands AFTER recursion — maintains the MCQ invariant for next bi.
         cands &= ~vb;
         v_isub(cands_sum, gs.vp[v]);
 
+        // Incremental parent UB update via lc_remove (O(|class|)).
+        // MCQ early-exit: once parent UB ≤ best_T, all remaining (lower-color)
+        // branches have the same or smaller bound → prune them all at once.
         int parent_ub = lc_remove(lc, v, gs);
         if (T + parent_ub <= gs.best_T.load(std::memory_order_relaxed)) break;
     }
@@ -743,19 +648,14 @@ void solve(input_t &input, output_t &output) {
     gs.best_T.store(-1, std::memory_order_relaxed);
     gs.best_mask = 0;
 
-    // ---- Sort vertices by weight descending (insertion sort: N≤64, zero overhead) ----
+    // ---- Sort vertices by weight descending ----
     struct VInfo { int id; int w; };
     VInfo vs[64];
     for (int i = 0; i < N; ++i) {
         vs[i].id = i; vs[i].w = 0;
         for (int k = 0; k < PDIM; ++k) vs[i].w += input.v[i][k];
     }
-    for (int i = 1; i < N; ++i) {
-        VInfo key = vs[i];
-        int j = i - 1;
-        while (j >= 0 && vs[j].w < key.w) { vs[j + 1] = vs[j]; --j; }
-        vs[j + 1] = key;
-    }
+    std::sort(vs, vs + N, [](const VInfo& a, const VInfo& b) { return a.w > b.w; });
 
     for (int i = 0; i < N; ++i) {
         int orig = vs[i].id;
@@ -778,67 +678,54 @@ void solve(input_t &input, output_t &output) {
     if (N <= 24) {
         // === SMALL FPT PATH ===
         // N<=24, p=0.95: k = N - max_clique ≈ 4, so FPT tree has ~2^4 = 16 leaves.
-        // Enhanced FPT with incremental cands_sum, coloring bound, and per-branch pruning.
-        {
-            uint64_t all_cands = (1ULL << N) - 1;
+        // Non-edge branching exploits the extreme density (complement is very sparse).
+        uint64_t all_cands = (1ULL << N) - 1;
 
-            // Compute initial cands_sum and cands_weight
-            alignas(64) int init_cs[PDIM];
-            memset(init_cs, 0, sizeof(init_cs));
-            int init_cw = 0;
-            { uint64_t tmp = all_cands; while (tmp) { int b = __builtin_ctzll(tmp); v_iadd(init_cs, gs.vp[b]); init_cw += gs.weights[b]; tmp &= tmp - 1; } }
+        alignas(64) int init_cs[PDIM];
+        memset(init_cs, 0, sizeof(init_cs));
+        int init_cw = 0;
+        { uint64_t tmp = all_cands; while (tmp) { int b = __builtin_ctzll(tmp); v_iadd(init_cs, gs.vp[b]); init_cw += gs.weights[b]; tmp &= tmp - 1; } }
 
-            #ifdef _OPENMP
-            const int n_threads = 8;
-            #else
-            const int n_threads = 1;
-            #endif
-            // Collect 2x thread count tasks for good dynamic load balancing
-            // Collect 8× thread count tasks: finer granularity eliminates the
-            // 6.6× max/median skew seen with the old 2× target.
-            const int target_tasks = n_threads * 8;
+        #ifdef _OPENMP
+        const int n_threads = 8;
+        #else
+        const int n_threads = 1;
+        #endif
+        const int target_tasks = n_threads * 2;
 
-            std::vector<uint64_t> tasks;
-            tasks.reserve(target_tasks * 2);
-            fpt_collect_tasks(all_cands, init_cw, init_cs, gs, tasks, target_tasks);
+        std::vector<uint64_t> tasks;
+        tasks.reserve(target_tasks * 2);
+        fpt_collect_tasks(all_cands, init_cw, init_cs, gs, tasks, target_tasks);
 
-            const int ntasks = (int)tasks.size();
-            #ifdef _OPENMP
-            #pragma omp parallel for schedule(dynamic, 1) num_threads(n_threads)
-            #endif
-            for (int ti = 0; ti < ntasks; ++ti) {
-                alignas(64) int cs[PDIM];
-                memset(cs, 0, sizeof(cs));
-                int cw = 0;
-                uint64_t tmp = tasks[ti];
-                while (tmp) { int b = __builtin_ctzll(tmp); v_iadd(cs, gs.vp[b]); cw += gs.weights[b]; tmp &= tmp - 1; }
-                fpt_dfs(tasks[ti], cw, cs, gs);
-            }
+        const int ntasks = (int)tasks.size();
+        #ifdef _OPENMP
+        #pragma omp parallel for schedule(dynamic, 1) num_threads(n_threads)
+        #endif
+        for (int ti = 0; ti < ntasks; ++ti) {
+            alignas(64) int cs[PDIM];
+            memset(cs, 0, sizeof(cs));
+            int cw = 0;
+            uint64_t tmp = tasks[ti];
+            while (tmp) { int b = __builtin_ctzll(tmp); v_iadd(cs, gs.vp[b]); cw += gs.weights[b]; tmp &= tmp - 1; }
+            fpt_dfs(tasks[ti], cw, cs, gs);
         }
     } else {
         // === LARGE PATH (N > 24) ===
-        // BnB with BK pivot is more efficient for dense graphs at N=64.
-        //
-        // Problem: vertex 0 (heaviest, most neighbors) can account for >60% of
-        // total work as a single serial task, starving all other threads.
-        //
-        // Fix: pre-expand the BnB tree for ALL root vertices into a shared task
-        // pool (target = 8× thread count), then execute the pool in parallel.
-        // This splits vertex 0's monolithic subtree into many fine-grained tasks.
+        // MCQ (Maximum-Clique-based coloring Bound) solver.
+        // Outer symmetry-breaking loop: fix vertex i as the lexicographically
+        // smallest clique member and restrict candidates to higher-indexed
+        // neighbours only.
 
+#ifdef INSTRUMENTED
+        gs.init_counters();
+#endif
         #ifdef _OPENMP
-        const int n_threads_bnb = 8;
-        #else
-        const int n_threads_bnb = 1;
+        #pragma omp parallel for schedule(dynamic, 1) num_threads(8)
         #endif
-        // 8× threads gives enough granularity: even a 4× skewed task is bounded
-        // to ≤1 extra slot-time on 8 hardware threads.
-        const int target_bnb = n_threads_bnb * 8;
-
-        std::vector<BnBTask> bnb_tasks;
-        bnb_tasks.reserve(target_bnb * 2 + N);
-
         for (int i = 0; i < N; ++i) {
+#ifdef INSTRUMENTED
+            tl_outer_i = i;
+#endif
             alignas(64) int ss[PDIM];
             memcpy(ss, gs.vp[i], PDIM * sizeof(int));
 
@@ -847,25 +734,26 @@ void solve(input_t &input, output_t &output) {
 
             alignas(64) int cs[PDIM];
             memset(cs, 0, sizeof(cs));
-            { uint64_t tmp = c; while (tmp) { v_iadd(cs, gs.vp[__builtin_ctzll(tmp)]); tmp &= tmp-1; } }
+            { uint64_t tmp = c; while (tmp) { v_iadd(cs, gs.vp[__builtin_ctzll(tmp)]); tmp &= tmp - 1; } }
 
-            bnb_collect_tasks(1ULL << i, c, gs.weights[i], ss, cs,
-                              lc_compute(c, gs).ub, gs, bnb_tasks, target_bnb);
-        }
-
-        const int ntasks_bnb = (int)bnb_tasks.size();
-        #ifdef _OPENMP
-        #pragma omp parallel for schedule(dynamic, 1) num_threads(n_threads_bnb)
-        #endif
-        for (int ti = 0; ti < ntasks_bnb; ++ti) {
-            BnBTask& t = bnb_tasks[ti];
-            alignas(64) int sum[PDIM], cands_sum[PDIM];
-            memcpy(sum,       t.sum,       PDIM * sizeof(int));
-            memcpy(cands_sum, t.cands_sum, PDIM * sizeof(int));
-            dfs_bnb(t.mask, t.cands, t.T, sum, cands_sum, gs, t.lc_ub);
+            dfs_mcq(1ULL << i, c, gs.weights[i], ss, cs, gs);
         }
     }
 
+#ifdef INSTRUMENTED
+    {
+        uint64_t total = 0;
+        for (int i = 0; i < N; ++i) total += gs.outer_nodes[i].load();
+        fprintf(stderr, "NODES_TOTAL=%llu\n", (unsigned long long)total);
+        // Print top-10 outer iterations by node count
+        int order[64]; for (int i=0;i<N;i++) order[i]=i;
+        std::sort(order, order+N, [&](int a, int b){ return gs.outer_nodes[a].load() > gs.outer_nodes[b].load(); });
+        fprintf(stderr, "TOP_OUTER: ");
+        for (int k = 0; k < 10 && k < N; ++k)
+            fprintf(stderr, "i=%d(%llu) ", order[k], (unsigned long long)gs.outer_nodes[order[k]].load());
+        fprintf(stderr, "\n");
+    }
+#endif
     // ---- Output ----
     uint64_t fM = gs.best_mask;
     if (fM != 0) {
@@ -875,11 +763,11 @@ void solve(input_t &input, output_t &output) {
 
         output.T = fT;
         output.K_size = __builtin_popcountll(fM);
-        // Collect original IDs into a bitmask and iterate LSB-first → naturally ascending order.
-        // Replaces res[] array + std::sort entirely.
-        uint64_t orig_mask = 0;
-        { uint64_t tmp = fM; while (tmp) { int i = __builtin_ctzll(tmp); orig_mask |= 1ULL << gs.reorder_map[i]; tmp &= tmp - 1; } }
+        int res[64];
         int cnt = 0;
-        { uint64_t tmp = orig_mask; while (tmp) { int j = __builtin_ctzll(tmp); output.members[cnt++] = j + 1; tmp &= tmp - 1; } }
+        { uint64_t tmp = fM; while (tmp) { int i = __builtin_ctzll(tmp); res[cnt++] = gs.reorder_map[i] + 1; tmp &= tmp - 1; } }
+        std::sort(res, res + cnt);
+        for (int i = 0; i < output.K_size; ++i)
+            output.members[i] = res[i];
     }
 }

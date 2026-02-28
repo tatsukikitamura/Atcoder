@@ -3,4 +3,7 @@ data/out-*.txt
 
 compiler/
 build_profile/
-WSL2-Linux-Kernel/
+WSL2-Linux-Kernel
+data/
+build_instr/
+tmp/

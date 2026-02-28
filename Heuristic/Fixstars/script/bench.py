@@ -13,10 +13,11 @@ Options:
   filter             Only run test cases whose names contain this string
 
 Examples:
-  python3 bench.py                        # build + run all 30 cases x100
+  python3 bench.py                        # build + run all 300 cases x100 (sequential)
   python3 bench.py -n 20                  # 20 repetitions
   python3 bench.py --no-build -n 50       # skip build, 50 reps
   python3 bench.py small -n 10            # only small cases, 10 reps
+  python3 bench.py -j 4                   # override parallel workers
 """
 
 import argparse

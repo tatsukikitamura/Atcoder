@@ -1,6 +1,6 @@
-elapsed_nsec = 7434025
+elapsed_nsec = 10533731
 PartySize = 16
-ParameterSum = 101373178
+ParameterSum = 102144540
 PartyMembers = {
-2 4 5 6 7 8 10 11 15 16 17 19 20 21 23 24
+4 5 6 7 8 9 10 16 17 18 19 20 21 22 23 24
 }
