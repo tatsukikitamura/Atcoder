@@ -286,6 +286,16 @@ def main():
     skip_count = sum(1 for r in results if r and r['status'] == 'SKIP')
     total_time = sum(r['elapsed_num'] for r in results if r and 'elapsed_num' in r)
 
+    # Contest score: sum of (my_time / best_time) per test case.
+    # Best reference times (matching the contest server fastest known):
+    #   small (N=24): 100 µs
+    #   large (N=64): 150 µs
+    BEST_TIME_SMALL_US = 100.0
+    BEST_TIME_LARGE_US = 150.0
+
+    def best_time_for(tc: str) -> float:
+        return BEST_TIME_LARGE_US if 'large' in tc else BEST_TIME_SMALL_US
+
     print()
     print(c('============================================', BOLD, CYAN))
     print(c('  Summary', BOLD, CYAN))
@@ -297,14 +307,20 @@ def main():
     col_status =  8
     col_score  = 14
     col_time   = 10
+    col_cscore =  8
     header = (f"  {c(f'{'Test Case':<{col_tc}}', BOLD)}"
               f"  {c(f'{'Status':<{col_status}}', BOLD)}"
               f"  {c(f'{'Output Score':<{col_score}}', BOLD)}"
               f"  {c(f'{'Golden Score':<{col_score}}', BOLD)}"
-              f"  {c(f'{'Time':<{col_time}}', BOLD)}")
-    sep = (f"  {'─' * col_tc}  {'─' * col_status}  {'─' * col_score}  {'─' * col_score}  {'─' * col_time}")
+              f"  {c(f'{'Time':<{col_time}}', BOLD)}"
+              f"  {c(f'{'CScore':<{col_cscore}}', BOLD)}")
+    sep = (f"  {'─' * col_tc}  {'─' * col_status}  {'─' * col_score}"
+           f"  {'─' * col_score}  {'─' * col_time}  {'─' * col_cscore}")
     print(header)
     print(sep)
+
+    contest_score_total = 0.0
+    contest_score_count = 0
 
     for res in results:
         if res is None:
@@ -315,8 +331,24 @@ def main():
             status_colored = c(f"{'FAIL':<{col_status}}", RED)
         else:
             status_colored = c(f"{'SKIP':<{col_status}}", YELLOW)
+
+        # Contest score for this case: best_time / my_time (higher = better, 1.0 = matches fastest)
+        t = res.get('elapsed_num', 0.0)
+        if t > 0:
+            cs = best_time_for(res['tc']) / t
+            contest_score_total += cs
+            contest_score_count += 1
+            if cs >= 1.0:
+                cs_str = c(f'{cs:.3f}', GREEN)
+            elif cs >= 0.5:
+                cs_str = c(f'{cs:.3f}', YELLOW)
+            else:
+                cs_str = c(f'{cs:.3f}', RED)
+        else:
+            cs_str = 'N/A'
+
         print(f"  {res['tc']:<{col_tc}}  {status_colored}  {res['out_score']:<{col_score}}"
-              f"  {res['gold_score']:<{col_score}}  {res['elapsed']:<{col_time}}")
+              f"  {res['gold_score']:<{col_score}}  {res['elapsed']:<{col_time}}  {cs_str}")
 
     print()
     parts = [c(f'PASS: {pass_count}', GREEN), c(f'FAIL: {fail_count}', RED)]
@@ -326,6 +358,21 @@ def main():
     parts.append(c(f'Total Time: {total_time:.1f}µs', CYAN))
     print('  ' + '  '.join(parts))
     print()
+
+    # Contest score summary
+    if contest_score_count > 0:
+        avg_cs = contest_score_total / contest_score_count
+        if contest_score_total >= contest_score_count:
+            total_color = GREEN   # all cases at or above best reference
+        elif contest_score_total >= contest_score_count * 0.5:
+            total_color = YELLOW
+        else:
+            total_color = RED
+        print(c('  Contest Score (higher = better, 1.0 = matches fastest known)', BOLD))
+        print(f'  Reference: small={BEST_TIME_SMALL_US:.0f}µs  large={BEST_TIME_LARGE_US:.0f}µs')
+        print(f'  {"Total score:":<16} {c(f"{contest_score_total:.4f}", total_color)}  '
+              f'(avg per case: {c(f"{avg_cs:.4f}", total_color)},  cases: {contest_score_count})')
+        print()
 
     if fail_count == 0:
         print(c('All tests passed!', BOLD, GREEN))

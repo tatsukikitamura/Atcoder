@@ -27,11 +27,9 @@
 // Use -march=native locally (AVX2), -march=icelake-client for contest (AVX-512).
 
 #include <algorithm>
-#include <limits>
 #include <cstring>
-#include <iostream>
+#include <cstdlib>
 #include <atomic>
-#include <numeric>
 #include <vector>
 
 #if defined(__AVX512F__) || defined(__AVX2__)
@@ -41,7 +39,6 @@
 #ifdef _OPENMP
 #include <omp.h>
 #endif
-#include <climits>
 #include "io_struct.hpp"
 
 using io_struct::input_t;
@@ -63,14 +60,14 @@ struct GlobalState {
     int weights[64];           // total weight per vertex
     alignas(64) int vp[64][PDIM]; // parameters per vertex
     alignas(64) int rp[PDIM];    // BOSS requirements
-    int N;
     int reorder_map[64];       // reordered_id -> original_id
+    int best_small = -1;       // single-threaded best score for N<=24 FPT path
+};
 
-#ifdef INSTRUMENTED
-    // Per-outer-iteration node counts (atomic for OpenMP safety)
-    std::atomic<uint64_t> outer_nodes[64];
-    void init_counters() { for (int i = 0; i < 64; ++i) outer_nodes[i].store(0); }
-#endif
+struct FptTask {
+    uint64_t mask;
+    int cands_weight;
+    alignas(64) int cands_sum[PDIM];
 };
 // ============================================================================
 // SIMD 128-element operations
@@ -184,6 +181,16 @@ inline void update_best(GlobalState& gs, int T, uint64_t mask) {
     }
 
     gs.best_lock.clear(std::memory_order_release);
+}
+
+// Single-threaded (non-atomic) update for N==24 path.
+// Avoids the LOCK XCHG spinlock overhead (≈20-30 cycles even uncontested)
+// since fpt_dfs always runs on a single thread.
+inline void update_best_st(GlobalState& gs, int T, uint64_t mask) {
+    if (T > gs.best_T.load(std::memory_order_relaxed)) {
+        gs.best_mask = mask;
+        gs.best_T.store(T, std::memory_order_relaxed);
+    }
 }
 
 // ============================================================================
@@ -308,8 +315,7 @@ inline int lc_remove(LocalColorData& lc, int v, const GlobalState& gs) {
 // The upper bound is computed in O(|child_cands|).
 inline int mcq_child_ub(
     uint64_t child_cands, int c_v,   // c_v = color of branch vertex v (0-indexed)
-    const LocalColorData& lc, const GlobalState& gs,
-    int cutoff_ub)
+    const LocalColorData& lc, const GlobalState& gs)
 {
     if (c_v <= 0 || child_cands == 0) return 0;
 
@@ -321,85 +327,104 @@ inline int mcq_child_ub(
     for (int j = 0; j < c_v; ++j) {
         uint64_t m = lc.members[j] & child_cands;
         if (m) ub += gs.weights[__builtin_ctzll(m)];
-        if (ub > cutoff_ub) break;
     }
     return ub;
 }
 
 // ============================================================================
-// Phase 3-A: FPT non-edge branching (small N <= 24)
+// Phase 3-A: FPT non-edge branching (N == 24)
 // ============================================================================
-// Each non-edge (u,v) in G corresponds to an edge in complement G'.
-// At least one of u or v must be excluded from the clique.
-// Branching heuristic: pick u with fewest neighbors (most constrained),
-// then v = heaviest non-neighbor.
+// Branching scheme: "include u / exclude u" vertex branching on the complement.
 //
-// Enhanced with:
-//   - Incremental cands_sum for O(PDIM) constraint pruning
-//   - Coloring upper bound (tighter than simple weight sum)
-//   - Per-branch coloring pre-pruning via lc_remove
+//   Pick u = vertex with maximum complement-degree in current candidates.
+//   Branch A: include u → all non-neighbors of u are removed at once
+//             (candidates_A = candidates & adj[u]).
+//   Branch B: exclude u → remove only u
+//             (candidates_B = candidates \ {u}).
+//
+// When complement-degree d_u ≥ 2, Branch A removes d_u vertices simultaneously,
+// giving a tighter recursion tree than the plain binary non-edge branch (which
+// removes only 1 vertex per branch). For d_u = 1 it is identical to the old scheme.
+//
+// Per-branch coloring UB pre-pruning via lc_remove (branch B: O(|class|);
+// branch A: O(d_u × |class|)).
 void fpt_dfs(uint64_t candidates, int cands_weight, int* __restrict__ cands_sum, GlobalState& gs) {
     if (candidates == 0) return;
+
+    // Cheap O(1) pruning first.
+    if (cands_weight <= gs.best_small) return;
 
     // Constraint pruning: if all remaining candidates can't satisfy rp, prune (O(PDIM))
     if (!v_geq(cands_sum, gs.rp)) return;
 
-    // Weight upper bound: passed in incrementally — O(1) instead of O(|cands|)
-    int ub = cands_weight;
-    if (ub <= gs.best_T.load(std::memory_order_relaxed)) return;
+    const int cands_size = __builtin_popcountll(candidates);
 
-    // Tighter coloring upper bound
-    LocalColorData lc = lc_compute(candidates, gs);
-    if (lc.ub <= gs.best_T.load(std::memory_order_relaxed)) return;
-
-    // Find a non-edge (u,v) in candidates
-    int u = -1, v = -1;
+    // Find u = vertex with max non-neighbor count in candidates (max complement-degree).
+    // non_adj is computed over candidates excluding the vertex itself (adj has self-bit set).
+    int u = -1;
+    int max_non_adj_cnt = 0;
     {
-        int min_adj = INT_MAX;
         uint64_t scan = candidates;
         while (scan) {
             int i = __builtin_ctzll(scan);
-            uint64_t non_adj = candidates & ~gs.adj[i];
-            if (non_adj) {
-                int adj_cnt = __builtin_popcountll(candidates & gs.adj[i]);
-                if (adj_cnt < min_adj) {
-                    min_adj = adj_cnt;
-                    u = i;
-                    v = -1;
-                    int best_w = -1;
-                    uint64_t na = non_adj;
-                    while (na) {
-                        int j = __builtin_ctzll(na);
-                        if (gs.weights[j] > best_w) { best_w = gs.weights[j]; v = j; }
-                        na &= na - 1;
-                    }
-                }
-            }
+            int cnt = cands_size - __builtin_popcountll(candidates & gs.adj[i]);
+            if (cnt > max_non_adj_cnt) { max_non_adj_cnt = cnt; u = i; }
             scan &= scan - 1;
         }
     }
 
-    if (u == -1) {
-        // All candidates are mutually adjacent → valid clique
-        update_best(gs, ub, candidates);
+    if (max_non_adj_cnt == 0) {
+        // All candidates are mutually adjacent → valid clique (leaf: skip lc_compute)
+        if (cands_weight > gs.best_small) {
+            gs.best_small = cands_weight;
+            gs.best_mask = candidates;
+        }
         return;
     }
 
-    // Branch 1: exclude v — pre-prune with coloring bound
+    uint64_t non_adj_mask = candidates & ~gs.adj[u]; // non-neighbors of u in candidates
+
+    // Tighter coloring upper bound (only for internal nodes that actually branch)
+    LocalColorData lc = lc_compute(candidates, gs);
+    if (lc.ub <= gs.best_small) return;
+
+    // Branch A: include u → remove all non-neighbors of u at once
     {
-        LocalColorData lc1 = lc;
-        int ub1 = lc_remove(lc1, v, gs);
-        if (ub1 > gs.best_T.load(std::memory_order_relaxed)) {
-            v_isub(cands_sum, gs.vp[v]);
-            fpt_dfs(candidates & ~(1ULL << v), cands_weight - gs.weights[v], cands_sum, gs);
-            v_iadd(cands_sum, gs.vp[v]);
+        LocalColorData lcA = lc;
+        int ubA = lcA.ub;
+        uint64_t rm = non_adj_mask;
+        while (rm) {
+            int j = __builtin_ctzll(rm);
+            ubA = lc_remove(lcA, j, gs);
+            if (ubA <= gs.best_small) break;
+            rm &= rm - 1;
+        }
+        if (ubA > gs.best_small) {
+            // Remove non-adj vertices from cands_sum and cands_weight
+            uint64_t cands_A = candidates & gs.adj[u]; // u stays (self-adj bit is set)
+            int cw_A = cands_weight;
+            rm = non_adj_mask;
+            while (rm) {
+                int j = __builtin_ctzll(rm);
+                v_isub(cands_sum, gs.vp[j]);
+                cw_A -= gs.weights[j];
+                rm &= rm - 1;
+            }
+            fpt_dfs(cands_A, cw_A, cands_sum, gs);
+            // Restore cands_sum
+            rm = non_adj_mask;
+            while (rm) {
+                int j = __builtin_ctzll(rm);
+                v_iadd(cands_sum, gs.vp[j]);
+                rm &= rm - 1;
+            }
         }
     }
 
-    // Branch 2: exclude u — pre-prune with coloring bound (modify lc in-place)
+    // Branch B: exclude u — pre-prune with coloring bound (modify lc in-place)
     {
-        int ub2 = lc_remove(lc, u, gs);
-        if (ub2 > gs.best_T.load(std::memory_order_relaxed)) {
+        int ubB = lc_remove(lc, u, gs);
+        if (ubB > gs.best_small) {
             v_isub(cands_sum, gs.vp[u]);
             fpt_dfs(candidates & ~(1ULL << u), cands_weight - gs.weights[u], cands_sum, gs);
             v_iadd(cands_sum, gs.vp[u]);
@@ -407,65 +432,73 @@ void fpt_dfs(uint64_t candidates, int cands_weight, int* __restrict__ cands_sum,
     }
 }
 
-// Expand the FPT tree shallowly to collect independent subtasks for parallel execution.
-// Stops expanding a node when:
-//   (a) no non-edge remains (leaf clique) → add to tasks, OR
-//   (b) tasks.size() >= target_tasks → add as-is for fpt_dfs to finish.
+// ============================================================================
+// Phase 3-A helper: pre-split FPT tree into small independent subtasks
+// ============================================================================
+// Expands the FPT tree shallowly to produce sub-problems with smaller
+// candidate sets.  Smaller sets yield tighter lc_compute upper bounds inside
+// fpt_dfs, dramatically reducing node counts.
+// target_tasks controls depth: 4 gives 2 levels of branching (~4 leaves).
 static void fpt_collect_tasks(
     uint64_t candidates,
     int cands_weight,
     int* __restrict__ cands_sum,
     GlobalState& gs,
-    std::vector<uint64_t>& tasks,
+    std::vector<FptTask>& tasks,
     int target_tasks
 ) {
     if (candidates == 0) return;
 
-    // Constraint pruning
+    // Cheap O(1) pruning first.
+    if (cands_weight <= gs.best_small) return;
+
     if (!v_geq(cands_sum, gs.rp)) return;
 
-    // Prune by weight upper bound
-    int ub = cands_weight;
-    if (ub <= gs.best_T.load(std::memory_order_relaxed)) return;
-
-    // If we already have enough tasks, stop expanding and queue the rest for fpt_dfs
     if ((int)tasks.size() >= target_tasks) {
-        tasks.emplace_back(candidates);
+        tasks.push_back({});
+        FptTask& t = tasks.back();
+        t.mask = candidates;
+        t.cands_weight = cands_weight;
+        memcpy(t.cands_sum, cands_sum, PDIM * sizeof(int));
         return;
     }
 
-    // Find a non-edge (same heuristic as fpt_dfs)
-    int u = -1, v = -1;
+    // Same pivot as fpt_dfs: pick u with max complement-degree in candidates
+    int u = -1;
     {
-        int min_adj = INT_MAX;
+        const int cands_size = __builtin_popcountll(candidates);
+        int max_non_adj_cnt = 0;
         uint64_t scan = candidates;
         while (scan) {
             int i = __builtin_ctzll(scan);
-            uint64_t non_adj = candidates & ~gs.adj[i];
-            if (non_adj) {
-                int adj_cnt = __builtin_popcountll(candidates & gs.adj[i]);
-                if (adj_cnt < min_adj) {
-                    min_adj = adj_cnt;
-                    u = i;
-                    v = -1; int bw = -1;
-                    uint64_t na = non_adj;
-                    while (na) { int j = __builtin_ctzll(na); if (gs.weights[j] > bw) { bw = gs.weights[j]; v = j; } na &= na-1; }
-                }
-            }
+            int cnt = cands_size - __builtin_popcountll(candidates & gs.adj[i]);
+            if (cnt > max_non_adj_cnt) { max_non_adj_cnt = cnt; u = i; }
             scan &= scan - 1;
         }
     }
 
     if (u == -1) {
-        // Leaf: all candidates are mutually adjacent
-        tasks.emplace_back(candidates);
+        tasks.push_back({});
+        FptTask& t = tasks.back();
+        t.mask = candidates;
+        t.cands_weight = cands_weight;
+        memcpy(t.cands_sum, cands_sum, PDIM * sizeof(int));
         return;
     }
 
-    v_isub(cands_sum, gs.vp[v]);
-    fpt_collect_tasks(candidates & ~(1ULL << v), cands_weight - gs.weights[v], cands_sum, gs, tasks, target_tasks);
-    v_iadd(cands_sum, gs.vp[v]);
+    // Branch A: include u (remove non-neighbors)
+    {
+        uint64_t non_adj_mask = candidates & ~gs.adj[u];
+        uint64_t cands_A = candidates & gs.adj[u];
+        int cw_A = cands_weight;
+        uint64_t rm = non_adj_mask;
+        while (rm) { int j = __builtin_ctzll(rm); v_isub(cands_sum, gs.vp[j]); cw_A -= gs.weights[j]; rm &= rm - 1; }
+        fpt_collect_tasks(cands_A, cw_A, cands_sum, gs, tasks, target_tasks);
+        rm = non_adj_mask;
+        while (rm) { int j = __builtin_ctzll(rm); v_iadd(cands_sum, gs.vp[j]); rm &= rm - 1; }
+    }
 
+    // Branch B: exclude u
     v_isub(cands_sum, gs.vp[u]);
     fpt_collect_tasks(candidates & ~(1ULL << u), cands_weight - gs.weights[u], cands_sum, gs, tasks, target_tasks);
     v_iadd(cands_sum, gs.vp[u]);
@@ -513,10 +546,6 @@ static void fpt_collect_tasks(
 // Branches on ALL candidates (no BK pivot), so branching factor = |cands|,
 // but with tight per-vertex bounds the effective factor is much smaller.
 //
-#ifdef INSTRUMENTED
-thread_local int tl_outer_i = 0;
-#endif
-
 void dfs_mcq(
     uint64_t mask,
     uint64_t cands,
@@ -525,12 +554,9 @@ void dfs_mcq(
     int* __restrict__ cands_sum,
     GlobalState& gs
 ) {
-#ifdef INSTRUMENTED
-    gs.outer_nodes[tl_outer_i].fetch_add(1, std::memory_order_relaxed);
-#endif
     // ---- Feasibility update ----
     if (v_geq(sum, gs.rp)) {
-        update_best(gs, T, mask);
+        update_best_st(gs, T, mask);
     }
     if (cands == 0) return;
 
@@ -584,6 +610,10 @@ void dfs_mcq(
 
     alignas(64) int new_cands_sum[PDIM];
 
+    // Cache best_T for the entire loop iteration; refresh only after recursion.
+    // Avoids repeated atomic loads that block compiler hoisting/CSE.
+    int cur_best = gs.best_T.load(std::memory_order_relaxed);
+
     // ---- Main MCQ loop: process from verts[n-1] (highest color) down to verts[0] ----
     for (int bi = n - 1; bi >= 0; --bi) {
         int v    = verts[bi];
@@ -598,11 +628,9 @@ void dfs_mcq(
 
         // MCQ child upper bound: Σ_{j=0}^{c_v-1} max_weight(class j ∩ child_cands)
         // Strictly tighter than DSATUR (which would sum classes 0..K-1 ≥ c_v).
-        int best_snapshot = gs.best_T.load(std::memory_order_relaxed);
-        int cutoff_ub = best_snapshot - (T + gs.weights[v]);
-        int child_mcq_ub = mcq_child_ub(child_cands, c_v, lc, gs, cutoff_ub);
+        int child_mcq_ub = mcq_child_ub(child_cands, c_v, lc, gs);
 
-        if (T + gs.weights[v] + child_mcq_ub > best_snapshot) {
+        if (T + gs.weights[v] + child_mcq_ub > cur_best) {
             // Compute incremental new_cands_sum for child:
             //   new_cands_sum = cands_sum − vp[v] − Σ_{u ∈ cands \ N(v)} vp[u]
             v_sub(new_cands_sum, cands_sum, gs.vp[v]);
@@ -617,6 +645,7 @@ void dfs_mcq(
             v_iadd(sum, gs.vp[v]);
             dfs_mcq(mask | vb, child_cands, T + gs.weights[v], sum, new_cands_sum, gs);
             v_isub(sum, gs.vp[v]);
+            cur_best = gs.best_T.load(std::memory_order_relaxed);  // refresh after recursion
         }
 
         // Remove v from cands AFTER recursion — maintains the MCQ invariant for next bi.
@@ -627,7 +656,7 @@ void dfs_mcq(
         // MCQ early-exit: once parent UB ≤ best_T, all remaining (lower-color)
         // branches have the same or smaller bound → prune them all at once.
         int parent_ub = lc_remove(lc, v, gs);
-        if (T + parent_ub <= gs.best_T.load(std::memory_order_relaxed)) break;
+        if (T + parent_ub <= cur_best) break;
     }
 }
 
@@ -638,15 +667,19 @@ void solve(input_t &input, output_t &output) {
     io_struct::InitOutput(output);
     const int N = input.N;
 
-    // Ensure OpenMP uses all available threads (4 cores × 2 HT = 8 threads)
+    // OpenMP thread policy (contest server aligned: 4C/8T):
+    // - If OMP_NUM_THREADS is explicitly set, respect it.
+    // - Otherwise default to 8 threads.
     #ifdef _OPENMP
-    omp_set_num_threads(8);
+    if (std::getenv("OMP_NUM_THREADS") == nullptr) {
+        omp_set_num_threads(8);
+    }
     #endif
 
     GlobalState gs;
-    gs.N = N;
     gs.best_T.store(-1, std::memory_order_relaxed);
     gs.best_mask = 0;
+    gs.best_small = -1;
 
     // ---- Sort vertices by weight descending ----
     struct VInfo { int id; int w; };
@@ -674,58 +707,66 @@ void solve(input_t &input, output_t &output) {
         gs.adj[i] |= (1ULL << i); // self-adjacent
     }
 
-    // ---- Execution strategy depends on problem size ----
-    if (N <= 24) {
-        // === SMALL FPT PATH ===
-        // N<=24, p=0.95: k = N - max_clique ≈ 4, so FPT tree has ~2^4 = 16 leaves.
+    // ---- Execution strategy ----
+    if (N == 24) {
+        // === N==24 FPT PATH ===
+        // N==24, p=0.95: k = N - max_clique ≈ 4, so FPT tree has ~2^4 = 16 leaves.
         // Non-edge branching exploits the extreme density (complement is very sparse).
         uint64_t all_cands = (1ULL << N) - 1;
+
+        // --- Greedy warm-start: set best_T before FPT search ---
+        // Vertices are sorted by weight descending. Single greedy pass: O(N) cost,
+        // negligible overhead. Tightens best_T before FPT tree starts.
+        {
+            uint64_t gc_mask = 0;
+            int gc_T = 0;
+            alignas(64) int gc_sum[PDIM];
+            memset(gc_sum, 0, sizeof(gc_sum));
+            uint64_t gc_adj = all_cands;
+            for (int i = 0; i < N; ++i) {
+                if (gc_mask == 0 || (gc_adj & (1ULL << i))) {
+                    gc_mask |= (1ULL << i);
+                    gc_T    += gs.weights[i];
+                    v_iadd(gc_sum, gs.vp[i]);
+                    gc_adj  &= gs.adj[i];
+                }
+            }
+            if (v_geq(gc_sum, gs.rp) && gc_T > gs.best_small) {
+                gs.best_small = gc_T;
+                gs.best_mask = gc_mask;
+            }
+        }
 
         alignas(64) int init_cs[PDIM];
         memset(init_cs, 0, sizeof(init_cs));
         int init_cw = 0;
         { uint64_t tmp = all_cands; while (tmp) { int b = __builtin_ctzll(tmp); v_iadd(init_cs, gs.vp[b]); init_cw += gs.weights[b]; tmp &= tmp - 1; } }
 
-        #ifdef _OPENMP
-        const int n_threads = 8;
-        #else
-        const int n_threads = 1;
-        #endif
-        const int target_tasks = n_threads * 2;
+        // Pre-split into small subtasks so each fpt_dfs call gets a smaller
+        // candidate set → tighter lc_compute upper bounds → fewer nodes.
+        // target_tasks=2: one shallow split level before handing off to fpt_dfs.
+        std::vector<FptTask> tasks;
+        tasks.reserve(4);
+        fpt_collect_tasks(all_cands, init_cw, init_cs, gs, tasks, 2);
 
-        std::vector<uint64_t> tasks;
-        tasks.reserve(target_tasks * 2);
-        fpt_collect_tasks(all_cands, init_cw, init_cs, gs, tasks, target_tasks);
-
-        const int ntasks = (int)tasks.size();
-        #ifdef _OPENMP
-        #pragma omp parallel for schedule(dynamic, 1) num_threads(n_threads)
-        #endif
-        for (int ti = 0; ti < ntasks; ++ti) {
+        for (const FptTask& task : tasks) {
             alignas(64) int cs[PDIM];
-            memset(cs, 0, sizeof(cs));
-            int cw = 0;
-            uint64_t tmp = tasks[ti];
-            while (tmp) { int b = __builtin_ctzll(tmp); v_iadd(cs, gs.vp[b]); cw += gs.weights[b]; tmp &= tmp - 1; }
-            fpt_dfs(tasks[ti], cw, cs, gs);
+            memcpy(cs, task.cands_sum, PDIM * sizeof(int));
+            fpt_dfs(task.mask, task.cands_weight, cs, gs);
         }
+
+        gs.best_T.store(gs.best_small, std::memory_order_relaxed);
     } else {
-        // === LARGE PATH (N > 24) ===
+        // === FALLBACK PATH (N != 24) ===
         // MCQ (Maximum-Clique-based coloring Bound) solver.
         // Outer symmetry-breaking loop: fix vertex i as the lexicographically
         // smallest clique member and restrict candidates to higher-indexed
         // neighbours only.
 
-#ifdef INSTRUMENTED
-        gs.init_counters();
-#endif
         #ifdef _OPENMP
-        #pragma omp parallel for schedule(dynamic, 1) num_threads(8)
+        #pragma omp parallel for schedule(dynamic, 1)
         #endif
         for (int i = 0; i < N; ++i) {
-#ifdef INSTRUMENTED
-            tl_outer_i = i;
-#endif
             alignas(64) int ss[PDIM];
             memcpy(ss, gs.vp[i], PDIM * sizeof(int));
 
@@ -740,20 +781,6 @@ void solve(input_t &input, output_t &output) {
         }
     }
 
-#ifdef INSTRUMENTED
-    {
-        uint64_t total = 0;
-        for (int i = 0; i < N; ++i) total += gs.outer_nodes[i].load();
-        fprintf(stderr, "NODES_TOTAL=%llu\n", (unsigned long long)total);
-        // Print top-10 outer iterations by node count
-        int order[64]; for (int i=0;i<N;i++) order[i]=i;
-        std::sort(order, order+N, [&](int a, int b){ return gs.outer_nodes[a].load() > gs.outer_nodes[b].load(); });
-        fprintf(stderr, "TOP_OUTER: ");
-        for (int k = 0; k < 10 && k < N; ++k)
-            fprintf(stderr, "i=%d(%llu) ", order[k], (unsigned long long)gs.outer_nodes[order[k]].load());
-        fprintf(stderr, "\n");
-    }
-#endif
     // ---- Output ----
     uint64_t fM = gs.best_mask;
     if (fM != 0) {
