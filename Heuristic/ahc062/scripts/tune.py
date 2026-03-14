@@ -8,6 +8,8 @@ import subprocess
 import os
 import re
 import sys
+import argparse
+from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
@@ -59,14 +61,20 @@ def objective(trial):
     t1 = trial.suggest_float("t1", 0.01, 100.0, log=True)
     maxlen = trial.suggest_int("maxlen", 1000, 30000)
     
-    # Neighborhood probabilities
-    p2opt = trial.suggest_int("p2opt", 0, 100)
-    pswap = trial.suggest_int("pswap", 0, 100 - p2opt)
+    # Neighborhood probabilities (relative weights)
+    p2opt = trial.suggest_int("p2opt", 10, 120)
+    poropt = trial.suggest_int("poropt", 0, 120)
+    plns = trial.suggest_int("plns", 0, 40)
+
+    # LNS controls
+    lns_min = trial.suggest_int("lns_min", 4, 32)
+    lns_max = trial.suggest_int("lns_max", lns_min + 4, 200)
+    lns_cands = trial.suggest_int("lns_cands", 4, 64)
     
     # Custom evaluation weights (-100 to 100)
     w1 = trial.suggest_float("w1", -100.0, 100.0)
     w2 = trial.suggest_float("w2", -100.0, 100.0)
-    w3 = trial.suggest_float("w3", -100.0, 100.0)
+    w3 = trial.suggest_float("w3", -100.0, 300.0)
     w4 = trial.suggest_float("w4", -100.0, 100.0)
     w5 = trial.suggest_float("w5", -100.0, 100.0)
     w6 = trial.suggest_float("w6", -100.0, 100.0)
@@ -78,7 +86,11 @@ def objective(trial):
         "t1": round(t1, 2),
         "maxlen": maxlen,
         "p2opt": p2opt,
-        "pswap": pswap,
+        "poropt": poropt,
+        "plns": plns,
+        "lns-min": lns_min,
+        "lns-max": lns_max,
+        "lns-cands": lns_cands,
         "w1": round(w1, 2),
         "w2": round(w2, 2),
         "w3": round(w3, 2),
@@ -104,7 +116,36 @@ def objective(trial):
     # We want to MAXIMIZE the score
     return total_score
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Optuna tuning for AHC062")
+    parser.add_argument(
+        "--db",
+        type=str,
+        default="",
+        help="SQLite DB file path (example: ahc062_tune_lns.db). If omitted, a timestamped new DB is created.",
+    )
+    parser.add_argument(
+        "--study-name",
+        type=str,
+        default="ahc062_multi_evals",
+        help="Optuna study name",
+    )
+    parser.add_argument(
+        "--trials",
+        type=int,
+        default=100,
+        help="Number of Optuna trials",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume existing study if present (default: create new study and fail if name already exists in DB)",
+    )
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
     os.makedirs(TMP_DIR, exist_ok=True)
     
     if not os.path.exists(SOLVER_PATH):
@@ -112,32 +153,49 @@ def main():
         sys.exit(1)
         
     # Use SQLite for Optuna-Dashboard support
-    storage_path = "sqlite:///ahc062_tune.db"
+    if args.db:
+        db_file = args.db
+    else:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        db_file = f"ahc062_tune_{ts}.db"
+    storage_path = f"sqlite:///{db_file}"
+
     study = optuna.create_study(
         direction="maximize", 
-        study_name="ahc062_multi_evals",
+        study_name=args.study_name,
         storage=storage_path,
-        load_if_exists=True
+        load_if_exists=args.resume
     )
     
     # Start from baseline: existing best param with 0 weights
     study.enqueue_trial({
-        "t0": 4420.73,
-        "t1": 0.16,
-        "maxlen": 27783,
-        "p2opt": 35,
-        "pswap": 42,
-        "w1": 0.0, "w2": 0.0, "w3": 0.0, "w4": 0.0,
-        "w5": 0.0, "w6": 0.0, "w7": 0.0, "w8": 0.0
+        "t0": 5545.355848986292,
+        "t1": 0.040546429892466644,
+        "maxlen": 11276,
+        "p2opt": 96,
+        "poropt": 91,
+        "plns": 34,
+        "lns_min": 24,
+        "lns_max": 75,
+        "lns_cands": 32,
+        "w1": -45.914168113550524,
+        "w2": 68.95742290592759,
+        "w3": 68.34295211938485,
+        "w4": 75.33955658885995,
+        "w5": -8.4887833674995,
+        "w6": -93.42334825462912,
+        "w7": -28.303654702102556,
+        "w8": -55.350700494417225,
     })
     
     print("="*60)
-    print("Starting Optuna tuning (100 trials, 50 tests/trial, 8 workers)")
-    print("Run `optuna-dashboard sqlite:///ahc062_tune.db` in another terminal to view results.")
+    print(f"Starting Optuna tuning ({args.trials} trials, 50 tests/trial, 8 workers)")
+    print(f"Storage: {storage_path}")
+    print(f"Study: {args.study_name}")
+    print(f"Run `optuna-dashboard {storage_path}` in another terminal to view results.")
     print("="*60)
     
-    # 100 trials
-    study.optimize(objective, n_trials=100)
+    study.optimize(objective, n_trials=args.trials)
     
     print("\n" + "="*50)
     print("Optimization Result")

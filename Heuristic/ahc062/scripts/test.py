@@ -17,18 +17,18 @@ from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # Configuration
-SOLVER_PATH = "./build/main.exe"
+DEFAULT_SOLVER_PATH = "./build/main.exe"
 INPUT_DIR = "tools/in"
 TMP_DIR = "tmp"
 TOOLS_DIR = "tools"
 
 
-def run_single_case(input_file: Path, solver_args: list) -> tuple[str, int]:
+def run_single_case(input_file: Path, solver_path: str, solver_args: list) -> tuple[str, int]:
     """Run solver on a single test case and return (name, score)."""
     name = input_file.stem
     output_file = Path(TMP_DIR) / f"out_{name}.txt"
     
-    cmd = [SOLVER_PATH] + solver_args
+    cmd = [solver_path] + solver_args
     
     try:
         with open(input_file, 'r') as f_in, open(output_file, 'w') as f_out:
@@ -64,13 +64,14 @@ def main():
     parser = argparse.ArgumentParser(description="Run tests and calculate score")
     parser.add_argument("-n", "--num", type=int, help="Number of test cases to run")
     parser.add_argument("-j", "--jobs", type=int, default=4, help="Parallel workers (default: 4)")
+    parser.add_argument("--solver", default=DEFAULT_SOLVER_PATH, help=f"Solver path (default: {DEFAULT_SOLVER_PATH})")
     args, unknown_args = parser.parse_known_args()
     
     # Setup
     os.makedirs(TMP_DIR, exist_ok=True)
     
-    if not os.path.exists(SOLVER_PATH):
-        print(f"Error: Solver not found. Run 'make' first.")
+    if not os.path.exists(args.solver):
+        print(f"Error: Solver not found: {args.solver}")
         sys.exit(1)
     
     # Get test cases
@@ -83,6 +84,7 @@ def main():
         sys.exit(1)
     
     print(f"Running {len(input_files)} test cases with {args.jobs} workers...")
+    print(f"Solver: {args.solver}")
     if unknown_args:
         print(f"Solver args: {' '.join(unknown_args)}")
     print("=" * 40)
@@ -90,7 +92,7 @@ def main():
     # Run tests in parallel
     results = []
     with ProcessPoolExecutor(max_workers=args.jobs) as executor:
-        futures = {executor.submit(run_single_case, f, unknown_args): f for f in input_files}
+        futures = {executor.submit(run_single_case, f, args.solver, unknown_args): f for f in input_files}
         for future in as_completed(futures):
             name, score = future.result()
             results.append((name, score))
