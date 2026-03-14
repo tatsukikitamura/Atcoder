@@ -87,7 +87,7 @@ def get_default_params_from_cpp(cpp_path: str) -> dict:
 
 # ===================== PARAMETER SPACE DEFINITION =====================
 def define_params(trial: optuna.Trial, defaults: dict) -> dict:
-    """Optunaのトライアルからハイパーパラメータを生成する (Top 11)"""
+    """Optunaのトライアルからハイパーパラメータを生成する (全15個)"""
     params = {}
 
     def suggest_float_near(name, diff=0.4, min_val=0.0, max_val=2.0):
@@ -96,58 +96,29 @@ def define_params(trial: optuna.Trial, defaults: dict) -> dict:
         high = min(max_val, val + diff)
         if high <= low: high = low + 1e-6
         return trial.suggest_float(name, low, high)
-    
-    def suggest_log_near(name):
-        val = defaults.get(name, 1e-5)
-        if val <= 1e-9: val = 1e-5
-        low = val * 0.01
-        high = val * 100.0
-        return trial.suggest_float(name, low, high, log=True)
 
-    # === Top Parameters ===
-    
-    # 1. rollout_depth_max & min
-    
-    # User requested explicit ranges: max = 1~10, min = 1~6
-    params["rollout_depth_max"] = trial.suggest_int("rollout_depth_max", 1, 10)
-    params["rollout_depth_min"] = trial.suggest_int("rollout_depth_min", 1, 6)
-    
-    # Ensure min <= max
-    if params["rollout_depth_min"] > params["rollout_depth_max"]:
-        params["rollout_depth_min"] = params["rollout_depth_max"]
-
-    # 2. wb_mid
-    params["wb_mid"] = suggest_float_near("wb_mid", 0.3)
-
-    # 3. wc_late
-    params["wc_late"] = suggest_float_near("wc_late", 0.3)
-
-    # 4. eval_level
-    params["eval_level"] = suggest_log_near("eval_level")
-
-    # 5. wd_early
-    params["wd_early"] = suggest_float_near("wd_early", 0.3)
-
-    # 6. eval_attack
-    params["eval_attack"] = suggest_log_near("eval_attack")
-
-    # 7. u_wb_boost
-    params["u_wb_boost"] = suggest_float_near("u_wb_boost", 0.2)
-
-    # 8. wd_mid
-    params["wd_mid"] = suggest_float_near("wd_mid", 0.3)
-
-    # 9. wa_late
-    params["wa_late"] = suggest_float_near("wa_late", 0.3)
-
-    # 10. wb_late
-    params["wb_late"] = suggest_float_near("wb_late", 0.3)
-
-    # 11. wc_early
+    # === greedyMove0 weights (8) ===
+    params["wa_early"] = suggest_float_near("wa_early", 0.3)
+    params["wb_early"] = suggest_float_near("wb_early", 0.3)
     params["wc_early"] = suggest_float_near("wc_early", 0.3)
+    params["wd_early"] = suggest_float_near("wd_early", 0.3)
+    params["wa_late"] = suggest_float_near("wa_late", 0.3)
+    params["wb_late"] = suggest_float_near("wb_late", 0.3)
+    params["wc_late"] = suggest_float_near("wc_late", 0.3)
+    params["wd_late"] = suggest_float_near("wd_late", 0.3)
 
-    # 12. eval_trap
-    params["eval_trap"] = suggest_log_near("eval_trap")
+    # === MCTS (3) ===
+    params["leader_mult"] = suggest_float_near("leader_mult", 0.5, min_val=0.5, max_val=3.0)
+    params["ucb_c"] = suggest_float_near("ucb_c", 0.3, min_val=0.1, max_val=2.0)
+    params["rollout_depth_max"] = trial.suggest_int("rollout_depth_max", 1, 15)
+    params["rollout_depth_min"] = trial.suggest_int("rollout_depth_min", 1, params["rollout_depth_max"])
+
+    # === eval (1) ===
+    params["eval_trap"] = suggest_float_near("eval_trap", 0.04, min_val=0.0, max_val=0.2)
+
+    # === U/M adaptation (2) ===
+    params["u_wb_boost"] = suggest_float_near("u_wb_boost", 0.4, min_val=0.0, max_val=2.0)
+    params["u_wd_penalty"] = suggest_float_near("u_wd_penalty", 0.3, min_val=0.0, max_val=1.0)
 
     return params
 
@@ -337,7 +308,7 @@ def main():
         print(f"{'='*40}")
 
         # Optuna study作成
-        sampler = TPESampler(seed=42, n_startup_trials=20)
+        sampler = TPESampler(seed=42, n_startup_trials=30)
         pruner = optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=3)
         
         study = optuna.create_study(
@@ -359,10 +330,11 @@ def main():
         initial_params = {}
         # List of all keys we expect to tune (based on define_params)
         expected_keys = [
+            "wa_early", "wb_early", "wc_early", "wd_early",
+            "wa_late", "wb_late", "wc_late", "wd_late",
+            "leader_mult", "ucb_c",
             "rollout_depth_max", "rollout_depth_min",
-            "wb_mid", "wc_late", "eval_level", "wd_early", "eval_attack",
-            "u_wb_boost", "wd_mid", "wa_late", "wb_late", "wc_early",
-            "eval_trap"
+            "eval_trap", "u_wb_boost", "u_wd_penalty"
         ]
         
         for k in expected_keys:

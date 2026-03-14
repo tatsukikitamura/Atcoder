@@ -61,24 +61,26 @@ double elapsedMs() {
 
 // ===================== TUNABLE HYPERPARAMETERS =====================
 struct HyperParams {
-    double phase1 = 0.27159946;
-    double phase2 = 0.70847988;
+    double phase1 = 0.33256506474965236;
+    double phase2 = 0.4019215226657056;
 
-    double wa_early = 0.23526016, wb_early = 0.36359119, wc_early = 0.5371575044253017, wd_early = 0.5077555584056729;
-    double wa_mid   = 0.75300129, wb_mid   = 0.21904990412930933, wc_mid   = 0.55583898, wd_mid   = 0.27191951030872996;
-    double wa_late  = 0.32765387887116504, wb_late  = 0.9455089805204405, wc_late  = 1.1040817859227758, wd_late  = 0.63228284;
+    double wa_early = 0.23526016, wb_early = 0.36359119, wc_early = 0.8305803949234962, wd_early = 0.41127403114538597;
+    double wa_mid   = 0.75300129, wb_mid   = 0.2908926225238072, wc_mid   = 0.55583898, wd_mid   = 0.27191951030872996;
+    double wa_late  = 0.20129789198183376, wb_late  = 0.7629078117597031, wc_late  = 1.1040817859227758, wd_late  = 0.63228284;
 
-    double leader_mult = 1.30321790;
-    double ucb_c = 0.68105000;
+    double leader_mult = 1.1518120534123801;
+    double ucb_c = 0.2814210135153185;
 
     double eval_expand = 0.00000069;
-    double eval_level  = 7.91852421430115e-06;
+    double eval_level  = 1.6930472349102937e-08;
     double eval_reach  = 0.00000390;
-    double eval_attack = 5.130551760589833e-06;
-    double eval_trap   = 0.04625183555111085;         // ★追加: M<=3のとき相手の拡張余地を減らす評価係数
+    double eval_attack = 1.269352840531392e-05;
+    double eval_trap   = 0.04625183555111085;
+    double eval_defense = 8.609306543347211e-07;
+    double eval_fortress = 2.2911271347665923e-08;
 
-    int rollout_depth_max = 8;
-    int rollout_depth_min = 5;
+    int rollout_depth_max = 9;
+    int rollout_depth_min = 4;
 
     int num_particles = 464;
     double pf_noise_w = 0.01800440;
@@ -556,12 +558,43 @@ double evaluate(const State& s, int currentTurn) {
         else if (o > 0 && s.level[ni] == 1) attackPot += V[ni];
     });
 
+    // ★新規: 防御脆弱性 & 確定資産評価
+    double defensePenalty = 0;
+    double fortressBonus = 0;
+
+    // 敵の到達可能領域を合成（敵隣接判定用）
+    Bitboard enemyReach = 0;
+    for (int p = 1; p < M; p++) enemyReach |= getReachableMask(s, p);
+    // 敵reachの隣接マスク
+    Bitboard enemyThreat = 0;
+    enemyThreat |= ((enemyReach & MASK_NOT_COL_0) >> 1);
+    enemyThreat |= ((enemyReach & MASK_NOT_COL_9) << 1);
+    enemyThreat |= (enemyReach >> 10);
+    enemyThreat |= (enemyReach << 10);
+    enemyThreat &= MASK_ALL;
+
+    // 自陣reachableセルを走査
+    forEachBit(reachMask, [&](int idx) {
+        int lv = s.level[idx];
+        double v = V[idx];
+        // 確定資産: 高levelほど安全 → level^2 * V でボーナス
+        if (lv >= 2) {
+            fortressBonus += v * (double)(lv * lv);
+        }
+        // 脆弱性: level=1かつ敵が隣接可能 → 奪われるリスク
+        if (lv == 1 && (((Bitboard)1 << idx) & enemyThreat)) {
+            defensePenalty += v;
+        }
+    });
+
     double remain = (double)(T - currentTurn) * invT;
     double baseScore = log2(1.0 + ratio)
            + HP.eval_expand * expandPot * remain
            + HP.eval_level * levelPot * remain
            + HP.eval_reach * myReach
-           + HP.eval_attack * attackPot * remain;
+           + HP.eval_attack * attackPot * remain
+           - HP.eval_defense * defensePenalty * remain
+           + HP.eval_fortress * fortressBonus;
 
     // ★追加: M<=3のとき、全敵プレイヤーの拡張余地の合計を減らすと高評価
     if (M <= 3) {
@@ -742,7 +775,9 @@ void loadParams(const string& filename) {
         else if (k == "eval_level") HP.eval_level = val;
         else if (k == "eval_reach") HP.eval_reach = val;
         else if (k == "eval_attack") HP.eval_attack = val;
-        else if (k == "eval_trap") HP.eval_trap = val;   // ★追加
+        else if (k == "eval_trap") HP.eval_trap = val;
+        else if (k == "eval_defense") HP.eval_defense = val;
+        else if (k == "eval_fortress") HP.eval_fortress = val;
         else if (k == "rollout_depth_max") HP.rollout_depth_max = (int)val;
         else if (k == "rollout_depth_min") HP.rollout_depth_min = (int)val;
         else if (k == "num_particles") HP.num_particles = (int)val;

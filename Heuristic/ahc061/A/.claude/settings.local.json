@@ -5,7 +5,8 @@
       "Bash(python scripts/test.py:*)",
       "Bash(git stash:*)",
       "Write",
-      "Read"
+      "Read",
+      "Bash(python scripts/analyze_distribution.py:*)"
     ]
   }
 }
